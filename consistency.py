@@ -8,10 +8,16 @@ import tensorflow.contrib.slim as slim
 ## config
 config = {
     "seq_length": 5,
+    "max_n": 9, # if more than 9, will need to alter things like sequence length
     "output_seq_length": 2,
     "char_embedding_dim": 20,
     "vision_embedding_dim": 100,
     "problem_embedding_dim": 100,
+    "full_train_every": 1, # a full training example is given once every _ training examples
+    "num_train": 90,
+    "init_lr": 0.01,
+    "lr_decay": 0.9,
+    "lr_decays_every": 100,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
@@ -19,9 +25,9 @@ config = {
         "imagined_visual_solution_loss": 1.,
 
         "true_visual_problem_reconstruction_closs": 1.,
-        "true_visual_visual_reconstruction_closs": 1.,
+        "true_visual_visual_reconstruction_closs": 0.225, # heuristic, makes about the same size as the other losses
         "imagined_visual_problem_reconstruction_closs": 1.,
-        "imagined_visual_visual_reconstruction_closs": 1.,
+        "imagined_visual_visual_reconstruction_closs": 0.225, # heuristic, makes about the same size as the other losses
 
         "direct_solution_direct_visual_solution_closs": 1.,
         "direct_solution_imagined_visual_solution_closs": 1.,
@@ -32,6 +38,9 @@ config = {
 
 ##
 
+np.random.seed(0)
+tf.set_random_seed(0)
+
 number_vocab = map(str, range(10))
 op_vocab = ["+", "-", "*", "/"]
 control_vocab = ["<PAD>", "<START>"] 
@@ -41,8 +50,8 @@ vocab_dict = dict(zip(vocab, range(len(vocab)))) # index lookup
 def text_to_indices(text):
     return [vocab_dict[char] for char in text]
 
-def make_visual_array(n, m=None, op="+", dim=10):
-    x = numpy.zeros((2, dim, dim))
+def make_visual_array(n, m=None, op="*", dim=(config["max_n"]+1)):
+    x = np.zeros((2, dim, dim))
     if m is not None:
         if op == "*":
             if m > dim or n > dim:
@@ -77,7 +86,8 @@ def make_visual_array(n, m=None, op="+", dim=10):
         q, r = divmod(n, 10)
         x[0, :q, :] = 1.
         x[0, q, :r] = 1.
-    return x
+    
+    return np.transpose(x, [1,2,0])
 
 def right_pad_seq(seq, n=config['output_seq_length'], pad_symbol="<PAD>"):
     return seq + [pad_symbol] * (n- len(seq))
@@ -86,11 +96,39 @@ def left_pad_seq(seq, n=config['seq_length'], pad_symbol="<PAD>"):
     return [pad_symbol] * (n- len(seq)) + seq
 
 
+## Data generation 
 
+def make_multiplication_full_example(n, m):
+    """Makes a full data exemplar for learning multiplication (full meaning
+    problem, solution, and visual problem)."""
+
+    sol = n * m
+
+    problem = list(str(n)) + ["*"] + list(str(m))
+    problem = np.array([text_to_indices(left_pad_seq(problem))])
+    solution = list(str(sol))
+    solution = np.array([text_to_indices(right_pad_seq(solution))])
+    visual_array = np.array([make_visual_array(n, m, op="*")])
+
+    return {"problem": problem, "solution": solution, "visual_array": visual_array}
+
+dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)]
+np.random.shuffle(dataset)
+
+train_dataset = dataset[:config["num_train"]]
+test_dataset = dataset[config["num_train"]:]
+
+
+## Model(s)
 class consistency_model(object):
     def __init__(self, no_consistency=False, no_visual=False):
         self.no_consistency = no_consistency
         self.no_visual = no_visual
+        self.full_train_every = config['full_train_every']
+
+        self.curr_lr = config["init_lr"]
+        self.lr_decay = config["lr_decay"]
+        self.lr_decays_every = config["lr_decays_every"]
 
         self.vocab_size = vocab_size = len(vocab)
 
@@ -161,8 +199,10 @@ class consistency_model(object):
 
         self.direct_solution_loss = tf.nn.softmax_cross_entropy_with_logits(
             labels=ground_truth_solution, logits=direct_solution_logits) 
+        self.direct_solution_loss = tf.reduce_mean(
+            self.direct_solution_loss)
 
-        optimizer = tf.train.AdamOptimizer(self.lr_ph)
+        optimizer = tf.train.GradientDescentOptimizer(self.lr_ph)
 
         this_weight = config["loss_weights"]["direct_solution_loss"]
         self.direct_solution_train = optimizer.minimize(
@@ -170,6 +210,9 @@ class consistency_model(object):
 
         # Visual
         if no_visual:
+            # sesssion
+            self.sess = tf.Session()
+            self.sess.run(tf.global_variables_initializer())
             return
 
         def build_imagination_net(problem_embedding, reuse=True):
@@ -244,6 +287,8 @@ class consistency_model(object):
 
         self.direct_visual_solution_loss = tf.nn.softmax_cross_entropy_with_logits(
             labels=ground_truth_solution, logits=direct_solution_logits) 
+        self.direct_visual_solution_loss = tf.reduce_mean(
+            self.direct_visual_solution_loss)
 
         this_weight = config["loss_weights"]["direct_visual_solution_loss"]
         self.direct_visual_solution_train = optimizer.minimize(
@@ -261,6 +306,8 @@ class consistency_model(object):
 
         self.imagined_visual_solution_loss = tf.nn.softmax_cross_entropy_with_logits(
             labels=ground_truth_solution, logits=imagined_visual_solution_logits) 
+        self.imagined_visual_solution_loss = tf.reduce_mean(
+            self.imagined_visual_solution_loss)
 
         this_weight = config["loss_weights"]["imagined_visual_solution_loss"]
         self.imagined_visual_solution_train = optimizer.minimize(
@@ -312,6 +359,8 @@ class consistency_model(object):
 
         self.reconstructed_solution_loss = tf.nn.softmax_cross_entropy_with_logits(
             labels=ground_truth_solution, logits=reconstructed_direct_solution_logits) 
+        self.reconstructed_solution_loss = tf.reduce_mean(
+            self.reconstructed_solution_loss)
 
         this_weight = config["loss_weights"]["reconstructed_solution_loss"]
         self.reconstructed_solution_train = optimizer.minimize( 
@@ -320,6 +369,9 @@ class consistency_model(object):
 
         # Consistency
         if no_consistency:
+            # sesssion
+            self.sess = tf.Session()
+            self.sess.run(tf.global_variables_initializer())
             return
 
         problem_input_onehot = tf.one_hot(self.problem_input_ph, vocab_size)
@@ -330,6 +382,8 @@ class consistency_model(object):
              visual_input_embedding, problem_input_embeddings)
         self.true_visual_problem_reconstruction_closs = tf.nn.softmax_cross_entropy_with_logits(
             labels=problem_input_onehot, logits=true_visual_problem_reconstruction_logits) 
+        self.true_visual_problem_reconstruction_closs = tf.reduce_mean(
+            self.true_visual_problem_reconstruction_closs)
         
         this_weight = config["loss_weights"]["true_visual_problem_reconstruction_closs"]
         self.true_visual_problem_reconstruction_ctrain = optimizer.minimize(
@@ -341,6 +395,8 @@ class consistency_model(object):
              imagined_visual_embedding, problem_input_embeddings)
         self.imagined_visual_problem_reconstruction_closs = tf.nn.softmax_cross_entropy_with_logits(
             labels=problem_input_onehot, logits=imagined_visual_problem_reconstruction_logits) 
+        self.imagined_visual_problem_reconstruction_closs = tf.reduce_mean(
+            self.imagined_visual_problem_reconstruction_closs)
 
         this_weight = config["loss_weights"]["imagined_visual_problem_reconstruction_closs"]
         self.imagined_visual_problem_reconstruction_ctrain = optimizer.minimize(
@@ -368,6 +424,8 @@ class consistency_model(object):
             labels=direct_solution_softmax, logits=direct_visual_solution_logits)  
         self.direct_solution_direct_visual_solution_closs += 0.5*tf.nn.softmax_cross_entropy_with_logits(
             labels=direct_visual_solution_softmax, logits=direct_solution_logits)  
+        self.direct_solution_direct_visual_solution_closs = tf.reduce_mean(
+            self.direct_solution_direct_visual_solution_closs)
 
         this_weight = config["loss_weights"]["direct_solution_direct_visual_solution_closs"]
         self.direct_solution_direct_visual_solution_ctrain = optimizer.minimize(
@@ -378,6 +436,8 @@ class consistency_model(object):
             labels=direct_solution_softmax, logits=imagined_visual_solution_logits)  
         self.direct_solution_imagined_visual_solution_closs += 0.5*tf.nn.softmax_cross_entropy_with_logits(
             labels=imagined_visual_solution_softmax, logits=direct_solution_logits)  
+        self.direct_solution_imagined_visual_solution_closs = tf.reduce_mean(
+            self.direct_solution_imagined_visual_solution_closs)
 
         this_weight = config["loss_weights"]["direct_solution_imagined_visual_solution_closs"]
         self.direct_solution_imagined_visual_solution_ctrain = optimizer.minimize(
@@ -388,13 +448,277 @@ class consistency_model(object):
             labels=reconstructed_solution_softmax, logits=direct_visual_solution_logits)  
         self.reconstructed_solution_direct_visual_solution_closs += 0.5*tf.nn.softmax_cross_entropy_with_logits(
             labels=direct_visual_solution_softmax, logits=reconstructed_direct_solution_logits)  
+        self.reconstructed_solution_direct_visual_solution_closs = tf.reduce_mean(
+            self.reconstructed_solution_direct_visual_solution_closs)
 
         this_weight = config["loss_weights"]["reconstructed_solution_direct_visual_solution_closs"]
         self.reconstructed_solution_direct_visual_solution_ctrain = optimizer.minimize(
             this_weight * self.reconstructed_solution_direct_visual_solution_closs)
 
+        # sesssion
+        self.sess = tf.Session()
+        self.sess.run(tf.global_variables_initializer())
 
-        
 
-consistency_model()
+    def run_basic_train_example(self, train_exemplar):
+        """runs a train step without visual input -- nobody gets visual examples all the time"""
+        self.sess.run(
+            self.direct_solution_train,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
 
+        if self.no_visual:
+            return
+
+        self.sess.run(
+            self.imagined_visual_solution_train,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+
+        if self.no_consistency:
+            return 
+            
+        self.sess.run(
+            self.imagined_visual_problem_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.direct_solution_imagined_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+
+
+    def run_full_train_example(self, train_exemplar):
+        if self.no_visual:
+            raise NotImplementedError("A model with no_visual = True cannot run full examples")
+
+        self.run_basic_train_example(train_exemplar)
+ 
+        self.sess.run(
+            self.direct_visual_solution_train,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.reconstructed_solution_train,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+
+        if self.no_consistency:
+            return
+
+        self.sess.run(
+            self.true_visual_problem_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.direct_solution_direct_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.reconstructed_solution_direct_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.imagined_visual_visual_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.true_visual_visual_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplar["problem"],
+                       self.vision_input_ph: train_exemplar["visual_array"],
+                       self.solution_input_ph: train_exemplar["solution"],
+                       self.lr_ph: self.curr_lr})
+
+
+    def run_train_dataset(self, train_dataset):
+        for (i, train_exemplar) in enumerate(train_dataset):
+            if self.no_visual or (i % self.full_train_every != 0):
+                self.run_basic_train_example(train_exemplar)
+            else:
+                self.run_full_train_example(train_exemplar)
+           
+
+    def run_test_example(self, test_exemplar):
+        if self.no_visual:
+            this_exemplar_losses = self.sess.run(
+                [self.direct_solution_loss],
+                feed_dict={self.problem_input_ph: test_exemplar["problem"],
+                           self.solution_input_ph: test_exemplar["solution"]})
+
+
+        elif self.no_consistency:
+            this_exemplar_losses = self.sess.run(
+                [self.direct_solution_loss, 
+                 self.imagined_visual_solution_loss,
+                 self.direct_visual_solution_loss,
+                 self.reconstructed_solution_loss],
+                feed_dict={self.problem_input_ph: test_exemplar["problem"],
+                           self.vision_input_ph: test_exemplar["visual_array"],
+                           self.solution_input_ph: test_exemplar["solution"]})
+
+        else:
+            this_exemplar_losses = self.sess.run(
+                [self.direct_solution_loss, 
+                 self.imagined_visual_solution_loss,
+                 self.imagined_visual_problem_reconstruction_closs,
+                 self.direct_solution_imagined_visual_solution_closs,
+                 self.direct_visual_solution_loss,
+                 self.reconstructed_solution_loss,
+                 self.true_visual_problem_reconstruction_closs,
+                 self.direct_solution_direct_visual_solution_closs,
+                 self.reconstructed_solution_direct_visual_solution_closs,
+                 self.imagined_visual_visual_reconstruction_closs,
+                 self.true_visual_visual_reconstruction_closs],
+                feed_dict={self.problem_input_ph: test_exemplar["problem"],
+                           self.vision_input_ph: test_exemplar["visual_array"],
+                           self.solution_input_ph: test_exemplar["solution"]})
+
+        return this_exemplar_losses 
+
+    def run_test_dataset(self, test_dataset):
+        if self.no_visual:
+            test_direct_solution_loss = 0. 
+            for test_exemplar in test_dataset:
+                (this_direct_solution_loss,) = self.run_test_example(
+                    test_exemplar)
+                test_direct_solution_loss += this_direct_solution_loss
+            num_test = len(test_dataset)
+            test_direct_solution_loss /= num_test 
+            return (test_direct_solution_loss,)
+
+        elif self.no_consistency:
+            [test_direct_solution_loss, 
+             test_imagined_visual_solution_loss,
+             test_direct_visual_solution_loss,
+             test_reconstructed_solution_loss] = [0.] * 4
+            for test_exemplar in test_dataset:
+                (this_direct_solution_loss, 
+                 this_imagined_visual_solution_loss,
+                 this_direct_visual_solution_loss,
+                 this_reconstructed_solution_loss) = self.run_test_example(
+                     test_exemplar) 
+
+                test_direct_solution_loss += this_direct_solution_loss 
+                test_imagined_visual_solution_loss += this_imagined_visual_solution_loss
+                test_direct_visual_solution_loss += this_direct_visual_solution_loss
+                test_reconstructed_solution_loss += this_reconstructed_solution_loss
+
+            num_test = len(test_dataset)
+            test_direct_solution_loss /= num_test 
+            test_imagined_visual_solution_loss /= num_test
+            test_direct_visual_solution_loss /= num_test
+            test_reconstructed_solution_loss /= num_test
+
+            return [test_direct_solution_loss, 
+                    test_imagined_visual_solution_loss,
+                    test_direct_visual_solution_loss,
+                    test_reconstructed_solution_loss]
+
+        else:
+            [test_direct_solution_loss, 
+             test_imagined_visual_solution_loss,
+             test_imagined_visual_problem_reconstruction_closs,
+             test_direct_solution_imagined_visual_solution_closs,
+             test_direct_visual_solution_loss,
+             test_reconstructed_solution_loss,
+             test_true_visual_problem_reconstruction_closs,
+             test_direct_solution_direct_visual_solution_closs,
+             test_reconstructed_solution_direct_visual_solution_closs,
+             test_imagined_visual_visual_reconstruction_closs,
+             test_true_visual_visual_reconstruction_closs] = [0.] * 11
+            for test_exemplar in test_dataset:
+                (this_direct_solution_loss, 
+                 this_imagined_visual_solution_loss,
+                 this_imagined_visual_problem_reconstruction_closs,
+                 this_direct_solution_imagined_visual_solution_closs,
+                 this_direct_visual_solution_loss,
+                 this_reconstructed_solution_loss,
+                 this_true_visual_problem_reconstruction_closs,
+                 this_direct_solution_direct_visual_solution_closs,
+                 this_reconstructed_solution_direct_visual_solution_closs,
+                 this_imagined_visual_visual_reconstruction_closs,
+                 this_true_visual_visual_reconstruction_closs) = self.run_test_example(
+                    test_exemplar) 
+
+                test_direct_solution_loss += this_direct_solution_loss 
+                test_imagined_visual_solution_loss += this_imagined_visual_solution_loss
+                test_imagined_visual_problem_reconstruction_closs += this_imagined_visual_problem_reconstruction_closs
+                test_direct_solution_imagined_visual_solution_closs += this_direct_solution_imagined_visual_solution_closs
+                test_direct_visual_solution_loss += this_direct_visual_solution_loss
+                test_reconstructed_solution_loss += this_reconstructed_solution_loss
+                test_true_visual_problem_reconstruction_closs += this_true_visual_problem_reconstruction_closs
+                test_direct_solution_direct_visual_solution_closs += this_direct_solution_direct_visual_solution_closs
+                test_reconstructed_solution_direct_visual_solution_closs += this_reconstructed_solution_direct_visual_solution_closs
+                test_imagined_visual_visual_reconstruction_closs += this_imagined_visual_visual_reconstruction_closs
+                test_true_visual_visual_reconstruction_closs += this_true_visual_visual_reconstruction_closs
+
+            num_test = len(test_dataset)
+            test_direct_solution_loss /= num_test 
+            test_imagined_visual_solution_loss /= num_test
+            test_imagined_visual_problem_reconstruction_closs /= num_test
+            test_direct_solution_imagined_visual_solution_closs /= num_test
+            test_direct_visual_solution_loss /= num_test
+            test_reconstructed_solution_loss /= num_test
+            test_true_visual_problem_reconstruction_closs /= num_test
+            test_direct_solution_direct_visual_solution_closs /= num_test
+            test_reconstructed_solution_direct_visual_solution_closs /= num_test
+            test_imagined_visual_visual_reconstruction_closs /= num_test
+            test_true_visual_visual_reconstruction_closs /= num_test
+
+            return [test_direct_solution_loss, 
+                    test_imagined_visual_solution_loss,
+                    test_imagined_visual_problem_reconstruction_closs,
+                    test_direct_solution_imagined_visual_solution_closs,
+                    test_direct_visual_solution_loss,
+                    test_reconstructed_solution_loss,
+                    test_true_visual_problem_reconstruction_closs,
+                    test_direct_solution_direct_visual_solution_closs,
+                    test_reconstructed_solution_direct_visual_solution_closs,
+                    test_imagined_visual_visual_reconstruction_closs,
+                    test_true_visual_visual_reconstruction_closs]
+
+
+    def run_training(self, train_dataset, test_dataset, nepochs=1000):
+        train_losses = []
+        test_losses = []
+        train_losses.append(self.run_test_dataset(train_dataset))
+        test_losses.append(self.run_test_dataset(test_dataset))
+        print("Pre train")
+        print(train_losses[-1])
+        print("Pre test")
+        print(test_losses[-1])
+        for epoch in xrange(nepochs):
+            np.random.shuffle(train_dataset)
+            self.run_train_dataset(train_dataset)
+            train_losses.append(self.run_test_dataset(train_dataset))
+            test_losses.append(self.run_test_dataset(test_dataset))
+            if epoch % 10 == 0:
+                print("Epoch %i train:" % epoch)
+                print(train_losses[-1])
+                print("test:")
+                print(test_losses[-1])
+            if epoch % self.lr_decays_every == 0 and epoch != 0:
+                self.curr_lr *= self.lr_decay
+        print("Post train")
+        print(train_losses[-1])
+        print("Post test")
+        print(test_losses[-1])
+
+cm = consistency_model()
+cm.run_training(train_dataset, test_dataset, 1000)
