@@ -8,16 +8,16 @@ import tensorflow.contrib.slim as slim
 ## config
 config = {
     "seq_length": 5,
-    "max_n": 9, # if more than 9, will need to alter things like sequence length
-    "output_seq_length": 2,
+    "max_n": 99, 
+    "output_seq_length": 3,
     "char_embedding_dim": 20,
     "vision_embedding_dim": 100,
     "problem_embedding_dim": 100,
     "full_train_every": 1, # a full training example is given once every _ training examples
-    "num_train": 90,
+    "num_train": 1000,
     "init_lr": 0.01,
     "lr_decay": 0.9,
-    "lr_decays_every": 100,
+    "lr_decays_every": 50,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
@@ -50,7 +50,7 @@ vocab_dict = dict(zip(vocab, range(len(vocab)))) # index lookup
 def text_to_indices(text):
     return [vocab_dict[char] for char in text]
 
-def make_visual_array(n, m=None, op="*", dim=(config["max_n"]+1)):
+def make_visual_array(n, m=None, op="*", dim=(config["max_n"])):
     x = np.zeros((2, dim, dim))
     if m is not None:
         if op == "*":
@@ -60,15 +60,15 @@ def make_visual_array(n, m=None, op="*", dim=(config["max_n"]+1)):
         elif op == "-":
             if m > dim**2 or n > dim**2:
                 raise ValueError("One of m or n is greater than dim**2")
-            q, r = divmod(n, 10)
+            q, r = divmod(n, 20)
             x[0, :q, :] = 1.
             x[0, q, :r] = 1.
-            q, r = divmod(m, 10)
+            q, r = divmod(m, 20)
             x[1, :q, :] = 1.
             x[1, q, :r] = 1.
         elif op == "+":
-            q, r = divmod(n, 10)
-            q2, r2 = divmod(m, 10)
+            q, r = divmod(n, 20)
+            q2, r2 = divmod(m, 20)
             if q + q2 + 2 > dim:
                 raise ValueError("m + n is too large")
             x[0, :q, :] = 1.
@@ -83,7 +83,7 @@ def make_visual_array(n, m=None, op="*", dim=(config["max_n"]+1)):
     else:
         if n > dim**2:
             raise ValueError("n is greater than dim**2")
-        q, r = divmod(n, 10)
+        q, r = divmod(n, 20)
         x[0, :q, :] = 1.
         x[0, q, :r] = 1.
     
@@ -102,6 +102,7 @@ def make_multiplication_full_example(n, m):
     """Makes a full data exemplar for learning multiplication (full meaning
     problem, solution, and visual problem)."""
 
+
     sol = n * m
 
     problem = list(str(n)) + ["*"] + list(str(m))
@@ -112,7 +113,22 @@ def make_multiplication_full_example(n, m):
 
     return {"problem": problem, "solution": solution, "visual_array": visual_array}
 
-dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)]
+def make_addition_full_example(n, m):
+    """Makes a full data exemplar for learning addition (full meaning
+    problem, solution, and visual problem)."""
+
+
+    sol = n + m
+
+    problem = list(str(n)) + ["*"] + list(str(m))
+    problem = np.array([text_to_indices(left_pad_seq(problem))])
+    solution = list(str(sol))
+    solution = np.array([text_to_indices(right_pad_seq(solution))])
+    visual_array = np.array([make_visual_array(n, m, op="+", dim=20)])
+
+    return {"problem": problem, "solution": solution, "visual_array": visual_array}
+
+dataset = [make_addition_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1) if m + n <= 360]
 np.random.shuffle(dataset)
 
 train_dataset = dataset[:config["num_train"]]
@@ -220,15 +236,15 @@ class consistency_model(object):
             with tf.variable_scope('imagination', reuse=reuse):
                 # fully connected 
                 net = problem_embedding
-                net = slim.layers.fully_connected(net, 2 * 2 * 64, activation_fn=tf.nn.leaky_relu)
-                net = tf.reshape(net, [-1, 2, 2, 64])
+                net = slim.layers.fully_connected(net, 1 * 1 * 128, activation_fn=tf.nn.leaky_relu)
+                net = tf.reshape(net, [-1, 1, 1, 128])
 
                 # 2
-                net = tf.image.resize_bilinear(net, [4, 4])
+                net = tf.image.resize_bilinear(net, [3, 3])
                 net = slim.layers.conv2d_transpose(net, 32, [2, 2], stride=2)
 
                 # 1
-                net = tf.image.resize_bilinear(net, [10, 10])
+                net = tf.image.resize_bilinear(net, [20, 20])
                 net = slim.layers.conv2d_transpose(net, 2, [3, 3], stride=1)
                 return net
 
@@ -238,10 +254,10 @@ class consistency_model(object):
             with tf.variable_scope('perception', reuse=reuse):
                 # 1
                 net = slim.layers.conv2d(perception_input, 32, [2, 2], stride=1)
-                net = slim.layers.avg_pool2d(net, [3, 3], stride=1)
+                net = slim.layers.avg_pool2d(net, [3, 3], stride=3)
                 # 2
-                net = slim.layers.conv2d(net, 64, [2, 2], stride=2)
-                net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
+                net = slim.layers.conv2d(net, 128, [2, 2], stride=2)
+                net = slim.layers.avg_pool2d(net, [3, 3], stride=3)
                 # fc
                 net = slim.flatten(net)
                 representation = slim.layers.fully_connected(net, config["vision_embedding_dim"], activation_fn=tf.nn.leaky_relu)
@@ -277,7 +293,7 @@ class consistency_model(object):
 
 
         # visual path
-        self.vision_input_ph = tf.placeholder(tf.float32, [None, 10, 10, 2])
+        self.vision_input_ph = tf.placeholder(tf.float32, [None, 20, 20, 2])
         visual_input_embedding = build_perception_net(self.vision_input_ph,
                                                       reuse=False)
         direct_visual_solution_logits = build_perceptual_solution_net(
@@ -460,12 +476,12 @@ class consistency_model(object):
         self.sess.run(tf.global_variables_initializer())
 
 
-    def run_basic_train_example(self, train_exemplar):
+    def run_basic_train_example(self, train_exemplars):
         """runs a train step without visual input -- nobody gets visual examples all the time"""
         self.sess.run(
             self.direct_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
+                       self.solution_input_ph: train_exemplars[0]["solution"],
 		       self.lr_ph: self.curr_lr})
 
         if self.no_visual:
@@ -473,8 +489,8 @@ class consistency_model(object):
 
         self.sess.run(
             self.imagined_visual_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[1]["problem"],
+                       self.solution_input_ph: train_exemplars[1]["solution"],
 		       self.lr_ph: self.curr_lr})
 
         if self.no_consistency:
@@ -482,33 +498,33 @@ class consistency_model(object):
             
         self.sess.run(
             self.imagined_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[2]["problem"],
+                       self.solution_input_ph: train_exemplars[2]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.direct_solution_imagined_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[3]["problem"],
+                       self.solution_input_ph: train_exemplars[3]["solution"],
 		       self.lr_ph: self.curr_lr})
 
 
-    def run_full_train_example(self, train_exemplar):
+    def run_full_train_example(self, train_exemplars):
         if self.no_visual:
             raise NotImplementedError("A model with no_visual = True cannot run full examples")
 
-        self.run_basic_train_example(train_exemplar)
+        self.run_basic_train_example(train_exemplars)
  
         self.sess.run(
             self.direct_visual_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
+                       self.vision_input_ph: train_exemplars[-1]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-1]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.reconstructed_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-2]["problem"],
+                       self.vision_input_ph: train_exemplars[-2]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-2]["solution"],
 		       self.lr_ph: self.curr_lr})
 
         if self.no_consistency:
@@ -516,42 +532,87 @@ class consistency_model(object):
 
         self.sess.run(
             self.true_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-3]["problem"],
+                       self.vision_input_ph: train_exemplars[-3]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-3]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.direct_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-4]["problem"],
+                       self.vision_input_ph: train_exemplars[-4]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-4]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.reconstructed_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-5]["problem"],
+                       self.vision_input_ph: train_exemplars[-5]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-5]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.imagined_visual_visual_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-6]["problem"],
+                       self.vision_input_ph: train_exemplars[-6]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-6]["solution"],
 		       self.lr_ph: self.curr_lr})
         self.sess.run(
             self.true_visual_visual_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplar["problem"],
-                       self.vision_input_ph: train_exemplar["visual_array"],
-                       self.solution_input_ph: train_exemplar["solution"],
+            feed_dict={self.problem_input_ph: train_exemplars[-7]["problem"],
+                       self.vision_input_ph: train_exemplars[-7]["visual_array"],
+                       self.solution_input_ph: train_exemplars[-7]["solution"],
                        self.lr_ph: self.curr_lr})
 
+    def run_unlabeled_train_example(self, train_exemplars):
+        if self.no_visual or self.no_consistency:
+            raise NotImplementedError("A model with no_visual = True cannot run unlabeled examples")
+
+        self.sess.run(
+            self.imagined_visual_problem_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[2]["problem"],
+		       self.lr_ph: self.curr_lr})
+
+        self.sess.run(
+            self.direct_solution_imagined_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[3]["problem"],
+		       self.lr_ph: self.curr_lr})
+
+        self.sess.run(
+            self.true_visual_problem_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[-3]["problem"],
+                       self.vision_input_ph: train_exemplars[-3]["visual_array"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.direct_solution_direct_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[-4]["problem"],
+                       self.vision_input_ph: train_exemplars[-4]["visual_array"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.reconstructed_solution_direct_visual_solution_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[-5]["problem"],
+                       self.vision_input_ph: train_exemplars[-5]["visual_array"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.imagined_visual_visual_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[-6]["problem"],
+                       self.vision_input_ph: train_exemplars[-6]["visual_array"],
+		       self.lr_ph: self.curr_lr})
+        self.sess.run(
+            self.true_visual_visual_reconstruction_ctrain,
+            feed_dict={self.problem_input_ph: train_exemplars[-7]["problem"],
+                       self.vision_input_ph: train_exemplars[-7]["visual_array"],
+                       self.lr_ph: self.curr_lr})
 
     def run_train_dataset(self, train_dataset):
-        for (i, train_exemplar) in enumerate(train_dataset):
+        for i in xrange(len(train_dataset)):
+            if i < 10: 
+                train_exemplars = train_dataset[i-10:] + train_dataset[:i+1] 
+            else: 
+                train_exemplars = train_dataset[i-10:i+1]
+
+            assert(len(train_exemplars) == 11)
             if self.no_visual or (i % self.full_train_every != 0):
-                self.run_basic_train_example(train_exemplar)
+                self.run_basic_train_example(train_exemplars)
             else:
-                self.run_full_train_example(train_exemplar)
+                self.run_full_train_example(train_exemplars)
            
 
     def run_test_example(self, test_exemplar):
@@ -720,5 +781,5 @@ class consistency_model(object):
         print("Post test")
         print(test_losses[-1])
 
-cm = consistency_model()
+cm = consistency_model(True, True)
 cm.run_training(train_dataset, test_dataset, 1000)
