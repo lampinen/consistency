@@ -13,8 +13,8 @@ config = {
     "char_embedding_dim": 20,
     "vision_embedding_dim": 100,
     "problem_embedding_dim": 100,
-    "full_train_every": 1, # a full training example is given once every _ training examples
-    "num_train": 1000,
+    "full_train_every": 2, # a full training example is given once every _ training examples
+    "num_train": 8000,
     "init_lr": 0.01,
     "lr_decay": 0.9,
     "lr_decays_every": 50,
@@ -25,9 +25,9 @@ config = {
         "imagined_visual_solution_loss": 1.,
 
         "true_visual_problem_reconstruction_closs": 1.,
-        "true_visual_visual_reconstruction_closs": 0.225, # heuristic, makes about the same size as the other losses
+        "true_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
         "imagined_visual_problem_reconstruction_closs": 1.,
-        "imagined_visual_visual_reconstruction_closs": 0.225, # heuristic, makes about the same size as the other losses
+        "imagined_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
 
         "direct_solution_direct_visual_solution_closs": 1.,
         "direct_solution_imagined_visual_solution_closs": 1.,
@@ -561,7 +561,7 @@ class consistency_model(object):
                        self.solution_input_ph: train_exemplars[-7]["solution"],
                        self.lr_ph: self.curr_lr})
 
-    def run_unlabeled_train_example(self, train_exemplars):
+    def run_unlabelled_train_example(self, train_exemplars):
         if self.no_visual or self.no_consistency:
             raise NotImplementedError("A model with no_visual = True cannot run unlabeled examples")
 
@@ -608,11 +608,13 @@ class consistency_model(object):
             else: 
                 train_exemplars = train_dataset[i-10:i+1]
 
-            assert(len(train_exemplars) == 11)
-            if self.no_visual or (i % self.full_train_every != 0):
+            #assert(len(train_exemplars) == 11)
+            if self.no_visual and (i % self.full_train_every == 0):
                 self.run_basic_train_example(train_exemplars)
-            else:
+            elif (i % self.full_train_every == 0):
                 self.run_full_train_example(train_exemplars)
+            elif not (self.no_consistency):
+                self.run_unlabelled_train_example(train_exemplars)
            
 
     def run_test_example(self, test_exemplar):
@@ -652,8 +654,8 @@ class consistency_model(object):
 
         return this_exemplar_losses 
 
-    def run_test_dataset(self, test_dataset):
-        if self.no_visual:
+    def run_test_dataset(self, test_dataset, test_only_main=False):
+        if self.no_visual or test_only_main:
             test_direct_solution_loss = 0. 
             for test_exemplar in test_dataset:
                 (this_direct_solution_loss,) = self.run_test_example(
@@ -755,7 +757,7 @@ class consistency_model(object):
                     test_true_visual_visual_reconstruction_closs]
 
 
-    def run_training(self, train_dataset, test_dataset, nepochs=1000):
+    def run_training(self, train_dataset, test_dataset, nepochs=1000, test_only_main=False):
         train_losses = []
         test_losses = []
         train_losses.append(self.run_test_dataset(train_dataset))
@@ -767,9 +769,9 @@ class consistency_model(object):
         for epoch in xrange(nepochs):
             np.random.shuffle(train_dataset)
             self.run_train_dataset(train_dataset)
-            train_losses.append(self.run_test_dataset(train_dataset))
-            test_losses.append(self.run_test_dataset(test_dataset))
             if epoch % 10 == 0:
+                train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
+                test_losses.append(self.run_test_dataset(test_dataset, test_only_main=True))
                 print("Epoch %i train:" % epoch)
                 print(train_losses[-1])
                 print("test:")
@@ -781,5 +783,7 @@ class consistency_model(object):
         print("Post test")
         print(test_losses[-1])
 
-cm = consistency_model(True, True)
+np.random.seed(0)
+tf.set_random_seed(0)
+cm = consistency_model(False, False)
 cm.run_training(train_dataset, test_dataset, 1000)
