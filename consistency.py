@@ -8,30 +8,31 @@ import tensorflow.contrib.slim as slim
 ## config
 config = {
     "seq_length": 5,
-    "max_n": 99, 
-    "output_seq_length": 3,
-    "char_embedding_dim": 20,
-    "vision_embedding_dim": 100,
-    "problem_embedding_dim": 100,
+    "max_n": 64, 
+    "add_max_n": 64, 
+    "output_seq_length": 4,
+    "char_embedding_dim": 32,
+    "vision_embedding_dim": 128,
+    "problem_embedding_dim": 128,
     "full_train_every": 2, # a full training example is given once every _ training examples
-    "num_train": 8000,
-    "init_lr": 0.01,
-    "lr_decay": 0.9,
+    "num_train": 3968,
+    "init_lr": 0.001,
+    "lr_decay": 0.95,
     "lr_decays_every": 50,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
-        "reconstructed_solution_loss": 1.,
-        "imagined_visual_solution_loss": 1.,
+        "reconstructed_solution_loss": 0.1,
+        "imagined_visual_solution_loss": 0.1,
 
-        "true_visual_problem_reconstruction_closs": 1.,
-        "true_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
-        "imagined_visual_problem_reconstruction_closs": 1.,
-        "imagined_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
+        "true_visual_problem_reconstruction_closs": 0.1,
+        "true_visual_visual_reconstruction_closs": 0.006, # heuristic, makes about the same size as the other losses
+        "imagined_visual_problem_reconstruction_closs": 0.1,
+        "imagined_visual_visual_reconstruction_closs": 0.006, # heuristic, makes about the same size as the other losses
 
-        "direct_solution_direct_visual_solution_closs": 1.,
-        "direct_solution_imagined_visual_solution_closs": 1.,
-        "reconstructed_solution_direct_visual_solution_closs": 1.
+        "direct_solution_direct_visual_solution_closs": 0.1,
+        "direct_solution_imagined_visual_solution_closs": 0.1,
+        "reconstructed_solution_direct_visual_solution_closs": 0.1
     },
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
@@ -60,15 +61,15 @@ def make_visual_array(n, m=None, op="*", dim=(config["max_n"])):
         elif op == "-":
             if m > dim**2 or n > dim**2:
                 raise ValueError("One of m or n is greater than dim**2")
-            q, r = divmod(n, 20)
+            q, r = divmod(n, dim)
             x[0, :q, :] = 1.
             x[0, q, :r] = 1.
-            q, r = divmod(m, 20)
+            q, r = divmod(m, dim)
             x[1, :q, :] = 1.
             x[1, q, :r] = 1.
         elif op == "+":
-            q, r = divmod(n, 20)
-            q2, r2 = divmod(m, 20)
+            q, r = divmod(n, dim)
+            q2, r2 = divmod(m, dim)
             if q + q2 + 2 > dim:
                 raise ValueError("m + n is too large")
             x[0, :q, :] = 1.
@@ -124,11 +125,11 @@ def make_addition_full_example(n, m):
     problem = np.array([text_to_indices(left_pad_seq(problem))])
     solution = list(str(sol))
     solution = np.array([text_to_indices(right_pad_seq(solution))])
-    visual_array = np.array([make_visual_array(n, m, op="+", dim=20)])
+    visual_array = np.array([make_visual_array(n, m, op="+", dim=config["max_n"])])
 
     return {"problem": problem, "solution": solution, "visual_array": visual_array}
 
-dataset = [make_addition_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1) if m + n <= 360]
+dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)] + [make_addition_full_example(n,m) for n in xrange(config["add_max_n"] + 1) for m in xrange(config["add_max_n"] + 1)]
 np.random.shuffle(dataset)
 
 train_dataset = dataset[:config["num_train"]]
@@ -238,14 +239,25 @@ class consistency_model(object):
                 net = problem_embedding
                 net = slim.layers.fully_connected(net, 1 * 1 * 128, activation_fn=tf.nn.leaky_relu)
                 net = tf.reshape(net, [-1, 1, 1, 128])
+                #print(net.get_shape())
+
+                # 3
+                net = tf.image.resize_bilinear(net, [2, 2])
+                #print(net.get_shape())
+                net = slim.layers.conv2d_transpose(net, 64, [4, 4], stride=2)
+                #print(net.get_shape())
 
                 # 2
-                net = tf.image.resize_bilinear(net, [3, 3])
-                net = slim.layers.conv2d_transpose(net, 32, [2, 2], stride=2)
+                net = tf.image.resize_bilinear(net, [8, 8])
+                #print(net.get_shape())
+                net = slim.layers.conv2d_transpose(net, 32, [4, 4], stride=2)
+                #print(net.get_shape())
 
                 # 1
-                net = tf.image.resize_bilinear(net, [20, 20])
-                net = slim.layers.conv2d_transpose(net, 2, [3, 3], stride=1)
+                net = tf.image.resize_bilinear(net, [32, 32])
+                #print(net.get_shape())
+                net = slim.layers.conv2d_transpose(net, 2, [4, 4], stride=2)
+                #print(net.get_shape())
                 return net
 
 
@@ -253,16 +265,24 @@ class consistency_model(object):
             """Generates perceptual embedding of visual array"""
             with tf.variable_scope('perception', reuse=reuse):
                 # 1
-                net = slim.layers.conv2d(perception_input, 32, [2, 2], stride=1)
-                net = slim.layers.avg_pool2d(net, [3, 3], stride=3)
+                net = slim.layers.conv2d(perception_input, 32, [4, 4], stride=2)
+                #print(net.get_shape())
+                net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
+                #print(net.get_shape())
                 # 2
-                net = slim.layers.conv2d(net, 128, [2, 2], stride=2)
-                net = slim.layers.avg_pool2d(net, [3, 3], stride=3)
+                net = slim.layers.conv2d(net, 64, [4, 4], stride=2)
+                #print(net.get_shape())
+                net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
+                #print(net.get_shape())
+                # 3
+                net = slim.layers.conv2d(net, 128, [4, 4], stride=2)
+                #print(net.get_shape())
+                net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
                 # fc
+                #print(net.get_shape())
                 net = slim.flatten(net)
                 representation = slim.layers.fully_connected(net, config["vision_embedding_dim"], activation_fn=tf.nn.leaky_relu)
                 return representation
-
 
 
         def build_perceptual_solution_net(vision_embedding, reuse=True):
@@ -293,7 +313,7 @@ class consistency_model(object):
 
 
         # visual path
-        self.vision_input_ph = tf.placeholder(tf.float32, [None, 20, 20, 2])
+        self.vision_input_ph = tf.placeholder(tf.float32, [None, 64, 64, 2])
         visual_input_embedding = build_perception_net(self.vision_input_ph,
                                                       reuse=False)
         direct_visual_solution_logits = build_perceptual_solution_net(
@@ -617,8 +637,8 @@ class consistency_model(object):
                 self.run_unlabelled_train_example(train_exemplars)
            
 
-    def run_test_example(self, test_exemplar):
-        if self.no_visual:
+    def run_test_example(self, test_exemplar, test_only_main=False):
+        if self.no_visual or test_only_main:
             this_exemplar_losses = self.sess.run(
                 [self.direct_solution_loss],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
@@ -659,11 +679,11 @@ class consistency_model(object):
             test_direct_solution_loss = 0. 
             for test_exemplar in test_dataset:
                 (this_direct_solution_loss,) = self.run_test_example(
-                    test_exemplar)
+                    test_exemplar, test_only_main=test_only_main)
                 test_direct_solution_loss += this_direct_solution_loss
             num_test = len(test_dataset)
             test_direct_solution_loss /= num_test 
-            return (test_direct_solution_loss,)
+            return [test_direct_solution_loss,]
 
         elif self.no_consistency:
             [test_direct_solution_loss, 
@@ -760,14 +780,14 @@ class consistency_model(object):
     def run_training(self, train_dataset, test_dataset, nepochs=1000, test_only_main=False):
         train_losses = []
         test_losses = []
-        train_losses.append(self.run_test_dataset(train_dataset))
-        test_losses.append(self.run_test_dataset(test_dataset))
+        train_losses.append(self.run_test_dataset(train_dataset,test_only_main=True))
+        test_losses.append(self.run_test_dataset(test_dataset,test_only_main=True))
         print("Pre train")
         print(train_losses[-1])
         print("Pre test")
         print(test_losses[-1])
         for epoch in xrange(nepochs):
-            np.random.shuffle(train_dataset)
+#            np.random.shuffle(train_dataset)
             self.run_train_dataset(train_dataset)
             if epoch % 10 == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
@@ -785,5 +805,5 @@ class consistency_model(object):
 
 np.random.seed(0)
 tf.set_random_seed(0)
-cm = consistency_model(False, False)
-cm.run_training(train_dataset, test_dataset, 1000)
+cm = consistency_model()
+cm.run_training(train_dataset, test_dataset, 2000, test_only_main=True)
