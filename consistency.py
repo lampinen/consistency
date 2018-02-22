@@ -16,7 +16,7 @@ config = {
     "problem_embedding_dim": 128,
     "full_train_every": 2, # a full training example is given once every _ training examples
     "num_train": 3968,
-    "init_lr": 0.001,
+    "init_lr": 0.005,
     "lr_decay": 0.95,
     "lr_decays_every": 50,
     "loss_weights": {
@@ -491,132 +491,92 @@ class consistency_model(object):
         self.reconstructed_solution_direct_visual_solution_ctrain = optimizer.minimize(
             this_weight * self.reconstructed_solution_direct_visual_solution_closs)
 
+        # aggregated losses
+
+        self.visual_full_basic_loss = (self.direct_solution_loss + 
+                                 config["loss_weights"]["imagined_visual_solution_loss"] * self.imagined_visual_solution_loss)
+        self.visual_full_basic_train = optimizer.minimize(self.visual_full_basic_loss)
+
+        self.visual_full_loss = (self.visual_full_basic_loss + 
+                                 config["loss_weights"]["direct_visual_solution_loss"] * self.direct_visual_solution_loss + 
+                                 config["loss_weights"]["reconstructed_solution_loss"] * self.reconstructed_solution_loss)
+        self.visual_full_train = optimizer.minimize(self.visual_full_loss)
+
+        self.consistency_full_basic_loss = (self.visual_full_basic_loss +
+                                            config["loss_weights"]["imagined_visual_problem_reconstruction_closs"] * self.imagined_visual_problem_reconstruction_closs + 
+                                            config["loss_weights"]["direct_solution_imagined_visual_solution_closs"] * self.direct_solution_imagined_visual_solution_closs) 
+        self.consistency_full_basic_train = optimizer.minimize(self.consistency_full_basic_loss)
+
+        self.consistency_full_loss = (self.visual_full_loss +
+                                      config["loss_weights"]["imagined_visual_problem_reconstruction_closs"] * self.imagined_visual_problem_reconstruction_closs + 
+                                      config["loss_weights"]["direct_solution_imagined_visual_solution_closs"] * self.direct_solution_imagined_visual_solution_closs + 
+                                      config["loss_weights"]["true_visual_problem_reconstruction_closs"] * self.true_visual_problem_reconstruction_closs + 
+                                      config["loss_weights"]["direct_solution_direct_visual_solution_closs"] * self.direct_solution_direct_visual_solution_closs + 
+                                      config["loss_weights"]["reconstructed_solution_direct_visual_solution_closs"] * self.reconstructed_solution_direct_visual_solution_closs + 
+                                      config["loss_weights"]["imagined_visual_visual_reconstruction_closs"] * self.imagined_visual_visual_reconstruction_closs + 
+                                      config["loss_weights"]["true_visual_visual_reconstruction_closs"] * self.true_visual_visual_reconstruction_closs) 
+        self.consistency_full_train = optimizer.minimize(self.consistency_full_loss)
+
+        self.unlabelled_full_loss = (config["loss_weights"]["imagined_visual_problem_reconstruction_closs"] * self.imagined_visual_problem_reconstruction_closs + 
+                                     config["loss_weights"]["direct_solution_imagined_visual_solution_closs"] * self.direct_solution_imagined_visual_solution_closs + 
+                                     config["loss_weights"]["true_visual_problem_reconstruction_closs"] * self.true_visual_problem_reconstruction_closs + 
+                                     config["loss_weights"]["direct_solution_direct_visual_solution_closs"] * self.direct_solution_direct_visual_solution_closs + 
+                                     config["loss_weights"]["reconstructed_solution_direct_visual_solution_closs"] * self.reconstructed_solution_direct_visual_solution_closs + 
+                                     config["loss_weights"]["imagined_visual_visual_reconstruction_closs"] * self.imagined_visual_visual_reconstruction_closs + 
+                                     config["loss_weights"]["true_visual_visual_reconstruction_closs"] * self.true_visual_visual_reconstruction_closs) 
+        self.unlabelled_full_train = optimizer.minimize(self.unlabelled_full_loss)
+
         # sesssion
         self.sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
-
     def run_basic_train_example(self, train_exemplars):
         """runs a train step without visual input -- nobody gets visual examples all the time"""
-        self.sess.run(
-            self.direct_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
-                       self.solution_input_ph: train_exemplars[0]["solution"],
-		       self.lr_ph: self.curr_lr})
-
         if self.no_visual:
-            return
-
-        self.sess.run(
-            self.imagined_visual_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplars[1]["problem"],
-                       self.solution_input_ph: train_exemplars[1]["solution"],
-		       self.lr_ph: self.curr_lr})
-
-        if self.no_consistency:
-            return 
-            
-        self.sess.run(
-            self.imagined_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[2]["problem"],
-                       self.solution_input_ph: train_exemplars[2]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.direct_solution_imagined_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[3]["problem"],
-                       self.solution_input_ph: train_exemplars[3]["solution"],
-		       self.lr_ph: self.curr_lr})
+            self.sess.run(
+                self.direct_solution_train,
+                feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
+                           self.solution_input_ph: train_exemplars[0]["solution"],
+                           self.lr_ph: self.curr_lr})
+        elif self.no_consistency:
+            self.sess.run(
+                self.visual_full_basic_train,
+                feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
+                           self.solution_input_ph: train_exemplars[0]["solution"],
+                           self.lr_ph: self.curr_lr})
+        else:
+            self.sess.run(
+                self.consistency_full_basic_train,
+                feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
+                           self.solution_input_ph: train_exemplars[0]["solution"],
+                           self.lr_ph: self.curr_lr})
 
 
     def run_full_train_example(self, train_exemplars):
         if self.no_visual:
             raise NotImplementedError("A model with no_visual = True cannot run full examples")
+        elif self.no_consistency:
+            self.sess.run(
+                self.visual_full_train,
+                feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
+                           self.vision_input_ph: train_exemplars[-1]["visual_array"],
+                           self.solution_input_ph: train_exemplars[-1]["solution"],
+                           self.lr_ph: self.curr_lr})
+        else:
+            self.sess.run(
+                self.consistency_full_train,
+                feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
+                           self.vision_input_ph: train_exemplars[-1]["visual_array"],
+                           self.solution_input_ph: train_exemplars[-1]["solution"],
+                           self.lr_ph: self.curr_lr})
 
-        self.run_basic_train_example(train_exemplars)
- 
-        self.sess.run(
-            self.direct_visual_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
-                       self.vision_input_ph: train_exemplars[-1]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-1]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.reconstructed_solution_train,
-            feed_dict={self.problem_input_ph: train_exemplars[-2]["problem"],
-                       self.vision_input_ph: train_exemplars[-2]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-2]["solution"],
-		       self.lr_ph: self.curr_lr})
-
-        if self.no_consistency:
-            return
-
-        self.sess.run(
-            self.true_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-3]["problem"],
-                       self.vision_input_ph: train_exemplars[-3]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-3]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.direct_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-4]["problem"],
-                       self.vision_input_ph: train_exemplars[-4]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-4]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.reconstructed_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-5]["problem"],
-                       self.vision_input_ph: train_exemplars[-5]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-5]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.imagined_visual_visual_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-6]["problem"],
-                       self.vision_input_ph: train_exemplars[-6]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-6]["solution"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.true_visual_visual_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-7]["problem"],
-                       self.vision_input_ph: train_exemplars[-7]["visual_array"],
-                       self.solution_input_ph: train_exemplars[-7]["solution"],
-                       self.lr_ph: self.curr_lr})
 
     def run_unlabelled_train_example(self, train_exemplars):
         if self.no_visual or self.no_consistency:
-            raise NotImplementedError("A model with no_visual = True cannot run unlabeled examples")
+            raise NotImplementedError("A model with no_consistency = True cannot run unlabeled examples")
 
         self.sess.run(
-            self.imagined_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[2]["problem"],
-		       self.lr_ph: self.curr_lr})
-
-        self.sess.run(
-            self.direct_solution_imagined_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[3]["problem"],
-		       self.lr_ph: self.curr_lr})
-
-        self.sess.run(
-            self.true_visual_problem_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-3]["problem"],
-                       self.vision_input_ph: train_exemplars[-3]["visual_array"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.direct_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-4]["problem"],
-                       self.vision_input_ph: train_exemplars[-4]["visual_array"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.reconstructed_solution_direct_visual_solution_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-5]["problem"],
-                       self.vision_input_ph: train_exemplars[-5]["visual_array"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.imagined_visual_visual_reconstruction_ctrain,
-            feed_dict={self.problem_input_ph: train_exemplars[-6]["problem"],
-                       self.vision_input_ph: train_exemplars[-6]["visual_array"],
-		       self.lr_ph: self.curr_lr})
-        self.sess.run(
-            self.true_visual_visual_reconstruction_ctrain,
+            self.unlabelled_full_train,
             feed_dict={self.problem_input_ph: train_exemplars[-7]["problem"],
                        self.vision_input_ph: train_exemplars[-7]["visual_array"],
                        self.lr_ph: self.curr_lr})
