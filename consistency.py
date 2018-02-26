@@ -14,25 +14,26 @@ config = {
     "char_embedding_dim": 32,
     "vision_embedding_dim": 128,
     "problem_embedding_dim": 128,
+    "rnn_num_layers": 2,
     "full_train_every": 2, # a full training example is given once every _ training examples
     "num_train": 3968,
-    "init_lr": 0.005,
+    "init_lr": 0.001,
     "lr_decay": 0.95,
-    "lr_decays_every": 50,
+    "lr_decays_every": 100,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
-        "reconstructed_solution_loss": 0.1,
-        "imagined_visual_solution_loss": 0.1,
+        "reconstructed_solution_loss": 0.5,
+        "imagined_visual_solution_loss": 0.5,
 
-        "true_visual_problem_reconstruction_closs": 0.1,
-        "true_visual_visual_reconstruction_closs": 0.006, # heuristic, makes about the same size as the other losses
-        "imagined_visual_problem_reconstruction_closs": 0.1,
-        "imagined_visual_visual_reconstruction_closs": 0.006, # heuristic, makes about the same size as the other losses
+        "true_visual_problem_reconstruction_closs": 0.5,
+        "true_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
+        "imagined_visual_problem_reconstruction_closs": 0.5,
+        "imagined_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
 
-        "direct_solution_direct_visual_solution_closs": 0.1,
-        "direct_solution_imagined_visual_solution_closs": 0.1,
-        "reconstructed_solution_direct_visual_solution_closs": 0.1
+        "direct_solution_direct_visual_solution_closs": 0.5,
+        "direct_solution_imagined_visual_solution_closs": 0.5,
+        "reconstructed_solution_direct_visual_solution_closs": 0.5
     },
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
@@ -157,12 +158,13 @@ class consistency_model(object):
         def build_problem_processing_net(embedded_input, reuse=True):
             """Processes problem from char embeddings"""
             with tf.variable_scope('problem/reading', reuse=reuse):
-                cell = tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
             
-                state = cell.zero_state(config['batch_size'], tf.float32)
+                state = stacked_cell.zero_state(config['batch_size'], tf.float32)
                 with tf.variable_scope("recurrence", reuse=reuse):
                     for step in xrange(config['seq_length']):
-                        (output, state) = cell(embedded_input[:, step, :], state)
+                        (output, state) = stacked_cell(embedded_input[:, step, :], state)
                         tf.get_variable_scope().reuse_variables()
 
             return output
@@ -178,11 +180,14 @@ class consistency_model(object):
             """Solves problem from problem embedding"""
             with tf.variable_scope('problem/solution', reuse=reuse):
 
-                cell = tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
 
-                state = tf.contrib.rnn.LSTMStateTuple(problem_embedding, cell.zero_state(config['batch_size'], tf.float32)[1])
+                state = stacked_cell.zero_state(config['batch_size'], tf.float32)
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(problem_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
+
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
                 with tf.variable_scope("recurrence", reuse=reuse):
@@ -191,7 +196,7 @@ class consistency_model(object):
                         [config['problem_embedding_dim'], config['char_embedding_dim']],
                         tf.float32)
                     for step in xrange(config['output_seq_length']):
-                        (output, state) = cell(emb_output, state)
+                        (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
                         this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
                         char_logits.append(this_char_logits)
@@ -219,7 +224,7 @@ class consistency_model(object):
         self.direct_solution_loss = tf.reduce_mean(
             self.direct_solution_loss)
 
-        optimizer = tf.train.GradientDescentOptimizer(self.lr_ph)
+        optimizer = tf.train.AdamOptimizer(self.lr_ph)
 
         this_weight = config["loss_weights"]["direct_solution_loss"]
         self.direct_solution_train = optimizer.minimize(
@@ -289,11 +294,13 @@ class consistency_model(object):
             """Solves problem from visual embedding"""
             with tf.variable_scope('perception/solution', reuse=reuse):
 
-                cell = tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
 
-                state = tf.contrib.rnn.LSTMStateTuple(vision_embedding, cell.zero_state(config['batch_size'], tf.float32)[1])
+                state = stacked_cell.zero_state(config['batch_size'], tf.float32)
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
                 with tf.variable_scope("recurrence", reuse=reuse):
@@ -302,7 +309,7 @@ class consistency_model(object):
                         [config['problem_embedding_dim'], config['char_embedding_dim']],
                         tf.float32)
                     for step in xrange(config['output_seq_length']):
-                        (output, state) = cell(emb_output, state)
+                        (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
                         this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
                         char_logits.append(this_char_logits)
@@ -353,12 +360,14 @@ class consistency_model(object):
             """Reconstructs problem from visual embedding"""
             with tf.variable_scope('perception/problem_reconstruction', reuse=reuse):
 
-                cell = tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
                 emb_outputs = []
 
-                state = tf.contrib.rnn.LSTMStateTuple(vision_embedding, cell.zero_state(config['batch_size'], tf.float32)[1])
+                state = stacked_cell.zero_state(config['batch_size'], tf.float32)
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
                 with tf.variable_scope("recurrence", reuse=reuse):
@@ -368,7 +377,7 @@ class consistency_model(object):
                         tf.float32)
                     for step in xrange(config['seq_length']):
                         this_input = ground_truth[:, step-1, :]
-                        (output, state) = cell(this_input, state)
+                        (output, state) = stacked_cell(this_input, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
                         this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
                         emb_outputs.append(emb_output)
