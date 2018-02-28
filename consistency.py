@@ -15,7 +15,7 @@ config = {
     "vision_embedding_dim": 128,
     "problem_embedding_dim": 128,
     "rnn_num_layers": 2,
-    "full_train_every": 2, # a full training example is given once every _ training examples
+    "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 3968,
     "init_lr": 0.001,
     "lr_decay": 0.95,
@@ -130,7 +130,7 @@ def make_addition_full_example(n, m):
 
     return {"problem": problem, "solution": solution, "visual_array": visual_array}
 
-dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)] + [make_addition_full_example(n,m) for n in xrange(config["add_max_n"] + 1) for m in xrange(config["add_max_n"] + 1)]
+dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)]# + [make_addition_full_example(n,m) for n in xrange(config["add_max_n"] + 1) for m in xrange(config["add_max_n"] + 1)]
 np.random.shuffle(dataset)
 
 train_dataset = dataset[:config["num_train"]]
