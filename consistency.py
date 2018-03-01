@@ -45,7 +45,7 @@ config = {
 np.random.seed(0)
 tf.set_random_seed(0)
 
-number_vocab = map(str, range(10))
+number_vocab = [str(x) for x in range(10)]
 op_vocab = ["+", "-", "*", "/"]
 control_vocab = ["<PAD>", "<START>"] 
 vocab = number_vocab + op_vocab + control_vocab 
@@ -132,7 +132,7 @@ def make_addition_full_example(n, m):
 
     return {"problem": problem, "solution": solution, "visual_array": visual_array}
 
-dataset = [make_multiplication_full_example(n,m) for n in xrange(config["max_n"] + 1) for m in xrange(config["max_n"] + 1)]# + [make_addition_full_example(n,m) for n in xrange(config["add_max_n"] + 1) for m in xrange(config["add_max_n"] + 1)]
+dataset = [make_multiplication_full_example(n,m) for n in range(config["max_n"] + 1) for m in range(config["max_n"] + 1)]# + [make_addition_full_example(n,m) for n in range(config["add_max_n"] + 1) for m in range(config["add_max_n"] + 1)]
 np.random.shuffle(dataset)
 
 train_dataset = dataset[:config["num_train"]]
@@ -165,7 +165,7 @@ class consistency_model(object):
             
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
                 with tf.variable_scope("recurrence", reuse=reuse):
-                    for step in xrange(config['seq_length']):
+                    for step in range(config['seq_length']):
                         (output, state) = stacked_cell(embedded_input[:, step, :], state)
                         tf.get_variable_scope().reuse_variables()
 
@@ -188,7 +188,7 @@ class consistency_model(object):
                 char_logits = []
 
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
-                state = tuple([tf.contrib.rnn.LSTMStateTuple(problem_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(problem_embedding, state[0][1])] + [state[i] for i in range(1, len(state))])
 
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
@@ -197,7 +197,7 @@ class consistency_model(object):
                         "output_to_emb_output",
                         [config['problem_embedding_dim'], config['char_embedding_dim']],
                         tf.float32)
-                    for step in xrange(config['output_seq_length']):
+                    for step in range(config['output_seq_length']):
                         (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
                         this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
@@ -302,7 +302,7 @@ class consistency_model(object):
                 char_logits = []
 
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
-                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in range(1, len(state))])
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
                 with tf.variable_scope("recurrence", reuse=reuse):
@@ -310,7 +310,7 @@ class consistency_model(object):
                         "output_to_emb_output",
                         [config['problem_embedding_dim'], config['char_embedding_dim']],
                         tf.float32)
-                    for step in xrange(config['output_seq_length']):
+                    for step in range(config['output_seq_length']):
                         (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
                         this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
@@ -369,7 +369,7 @@ class consistency_model(object):
                 emb_outputs = []
 
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
-                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in xrange(1, len(state))])
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(vision_embedding, state[0][1])] + [state[i] for i in range(1, len(state))])
                 emb_output = tf.reshape(start_token, [config['batch_size'], -1])
 
                 with tf.variable_scope("recurrence", reuse=reuse):
@@ -377,7 +377,7 @@ class consistency_model(object):
                         "output_to_emb_output",
                         [config['problem_embedding_dim'], config['char_embedding_dim']],
                         tf.float32)
-                    for step in xrange(config['seq_length']):
+                    for step in range(config['seq_length']):
                         this_input = ground_truth[:, step-1, :]
                         (output, state) = stacked_cell(this_input, state)
                         emb_output = tf.matmul(output, output_to_emb_output) 
@@ -595,7 +595,7 @@ class consistency_model(object):
                        self.lr_ph: self.curr_lr})
 
     def run_train_dataset(self, train_dataset):
-        for i in xrange(len(train_dataset)):
+        for i in range(len(train_dataset)):
             if i < 10: 
                 train_exemplars = train_dataset[i-10:] + train_dataset[:i+1] 
             else: 
@@ -759,7 +759,7 @@ class consistency_model(object):
         print(train_losses[-1])
         print("Pre test")
         print(test_losses[-1])
-        for epoch in xrange(nepochs):
+        for epoch in range(nepochs):
 #            np.random.shuffle(train_dataset)
             self.run_train_dataset(train_dataset)
             if epoch % config["test_every_k"] == 0:
@@ -779,5 +779,5 @@ class consistency_model(object):
 
 np.random.seed(0)
 tf.set_random_seed(0)
-cm = consistency_model()
+cm = consistency_model(True, False)
 cm.run_training(train_dataset, test_dataset, 2000, test_only_main=True)
