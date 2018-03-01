@@ -1,6 +1,7 @@
 from __future__ import print_function
 from __future__ import division 
 
+import sys
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
@@ -35,6 +36,7 @@ config = {
         "direct_solution_imagined_visual_solution_closs": 0.5,
         "reconstructed_solution_direct_visual_solution_closs": 0.5
     },
+    "test_every_k": 5,
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
@@ -760,13 +762,14 @@ class consistency_model(object):
         for epoch in xrange(nepochs):
 #            np.random.shuffle(train_dataset)
             self.run_train_dataset(train_dataset)
-            if epoch % 10 == 0:
+            if epoch % config["test_every_k"] == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
                 test_losses.append(self.run_test_dataset(test_dataset, test_only_main=True))
                 print("Epoch %i train:" % epoch)
                 print(train_losses[-1])
                 print("test:")
                 print(test_losses[-1])
+                sys.stdout.flush()
             if epoch % self.lr_decays_every == 0 and epoch != 0:
                 self.curr_lr *= self.lr_decay
         print("Post train")
