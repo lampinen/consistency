@@ -751,6 +751,8 @@ class consistency_model(object):
 
 
     def run_training(self, train_dataset, test_dataset, nepochs=1000, test_only_main=False):
+        print("Config:")
+        print(config)
         train_losses = []
         test_losses = []
         train_losses.append(self.run_test_dataset(train_dataset,test_only_main=True))
