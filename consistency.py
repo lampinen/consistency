@@ -412,6 +412,17 @@ class consistency_model(object):
             this_weight * self.reconstructed_solution_loss)
 
 
+        # aggregated visual losses
+
+        self.visual_full_basic_loss = (self.direct_solution_loss + 
+                                 config["loss_weights"]["imagined_visual_solution_loss"] * self.imagined_visual_solution_loss)
+        self.visual_full_basic_train = optimizer.minimize(self.visual_full_basic_loss)
+
+        self.visual_full_loss = (self.visual_full_basic_loss + 
+                                 config["loss_weights"]["direct_visual_solution_loss"] * self.direct_visual_solution_loss + 
+                                 config["loss_weights"]["reconstructed_solution_loss"] * self.reconstructed_solution_loss)
+        self.visual_full_train = optimizer.minimize(self.visual_full_loss)
+
         # Consistency
         if no_consistency:
             # sesssion
@@ -501,15 +512,6 @@ class consistency_model(object):
             this_weight * self.reconstructed_solution_direct_visual_solution_closs)
 
         # aggregated losses
-
-        self.visual_full_basic_loss = (self.direct_solution_loss + 
-                                 config["loss_weights"]["imagined_visual_solution_loss"] * self.imagined_visual_solution_loss)
-        self.visual_full_basic_train = optimizer.minimize(self.visual_full_basic_loss)
-
-        self.visual_full_loss = (self.visual_full_basic_loss + 
-                                 config["loss_weights"]["direct_visual_solution_loss"] * self.direct_visual_solution_loss + 
-                                 config["loss_weights"]["reconstructed_solution_loss"] * self.reconstructed_solution_loss)
-        self.visual_full_train = optimizer.minimize(self.visual_full_loss)
 
         self.consistency_full_basic_loss = (self.visual_full_basic_loss +
                                             config["loss_weights"]["imagined_visual_problem_reconstruction_closs"] * self.imagined_visual_problem_reconstruction_closs + 
