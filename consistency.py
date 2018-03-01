@@ -242,7 +242,7 @@ class consistency_model(object):
             with tf.variable_scope('imagination', reuse=reuse):
                 # fully connected 
                 net = problem_embedding
-                net = slim.layers.fully_connected(net, 1 * 1 * 128, activation_fn=tf.nn.leaky_relu)
+                net = slim.layers.fully_connected(net, 1 * 1 * 128, activation_fn=tf.nn.relu)
                 net = tf.reshape(net, [-1, 1, 1, 128])
                 #print(net.get_shape())
 
@@ -286,7 +286,7 @@ class consistency_model(object):
                 # fc
                 #print(net.get_shape())
                 net = slim.flatten(net)
-                representation = slim.layers.fully_connected(net, config["vision_embedding_dim"], activation_fn=tf.nn.leaky_relu)
+                representation = slim.layers.fully_connected(net, config["vision_embedding_dim"], activation_fn=tf.nn.relu)
                 return representation
 
 
