@@ -15,7 +15,7 @@ config = {
     "char_embedding_dim": 32,
     "vision_embedding_dim": 128,
     "problem_embedding_dim": 128,
-    "rnn_num_layers": 2,
+    "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 3968,
     "init_lr": 0.001,
@@ -762,7 +762,7 @@ class consistency_model(object):
         print("Pre test")
         print(test_losses[-1])
         for epoch in range(nepochs):
-#            np.random.shuffle(train_dataset)
+            np.random.shuffle(train_dataset)
             self.run_train_dataset(train_dataset)
             if epoch % config["test_every_k"] == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
@@ -781,5 +781,5 @@ class consistency_model(object):
 
 np.random.seed(0)
 tf.set_random_seed(0)
-cm = consistency_model(True, False)
+cm = consistency_model()
 cm.run_training(train_dataset, test_dataset, 2000, test_only_main=True)
