@@ -228,6 +228,10 @@ class consistency_model(object):
         self.direct_solution_loss = tf.reduce_mean(
             self.direct_solution_loss)
 
+        # compute the number of digits/symbols wrong after thresholding as an alternative error measure
+        hardmax = tf.one_hot(tf.argmax(direct_solution_logits, axis=-1), depth=self.vocab_size)
+        self.direct_solution_thresholded_error = tf.reduce_sum(tf.abs((hardmax - ground_truth_solution)/2.))
+
         optimizer = tf.train.AdamOptimizer(self.lr_ph)
 
         this_weight = config["loss_weights"]["direct_solution_loss"]
@@ -615,7 +619,8 @@ class consistency_model(object):
     def run_test_example(self, test_exemplar, test_only_main=False):
         if self.no_visual or test_only_main:
             this_exemplar_losses = self.sess.run(
-                [self.direct_solution_loss],
+                [self.direct_solution_loss,
+                self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
                            self.solution_input_ph: test_exemplar["solution"]})
 
@@ -625,7 +630,8 @@ class consistency_model(object):
                 [self.direct_solution_loss, 
                  self.imagined_visual_solution_loss,
                  self.direct_visual_solution_loss,
-                 self.reconstructed_solution_loss],
+                 self.reconstructed_solution_loss,
+                 self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
                            self.vision_input_ph: test_exemplar["visual_array"],
                            self.solution_input_ph: test_exemplar["solution"]})
@@ -642,7 +648,8 @@ class consistency_model(object):
                  self.direct_solution_direct_visual_solution_closs,
                  self.reconstructed_solution_direct_visual_solution_closs,
                  self.imagined_visual_visual_reconstruction_closs,
-                 self.true_visual_visual_reconstruction_closs],
+                 self.true_visual_visual_reconstruction_closs,
+                 self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
                            self.vision_input_ph: test_exemplar["visual_array"],
                            self.solution_input_ph: test_exemplar["solution"]})
@@ -651,42 +658,51 @@ class consistency_model(object):
 
     def run_test_dataset(self, test_dataset, test_only_main=False):
         if self.no_visual or test_only_main:
-            test_direct_solution_loss = 0. 
+            [test_direct_solution_loss,
+             test_direct_solution_thresholded_error] = [0.] * 2 
             for test_exemplar in test_dataset:
-                (this_direct_solution_loss,) = self.run_test_example(
+                (this_direct_solution_loss, this_thresh_error) = self.run_test_example(
                     test_exemplar, test_only_main=test_only_main)
                 test_direct_solution_loss += this_direct_solution_loss
+                test_direct_solution_thresholded_error += this_thresh_error
             num_test = len(test_dataset)
             test_direct_solution_loss /= num_test 
-            return [test_direct_solution_loss,]
+            test_direct_solution_thresholded_error /= num_test 
+            return [test_direct_solution_loss,
+                    test_direct_solution_thresholded_error]
 
         elif self.no_consistency:
             [test_direct_solution_loss, 
              test_imagined_visual_solution_loss,
              test_direct_visual_solution_loss,
-             test_reconstructed_solution_loss] = [0.] * 4
+             test_reconstructed_solution_loss,
+             test_direct_solution_thresholded_error] = [0.] * 5
             for test_exemplar in test_dataset:
                 (this_direct_solution_loss, 
                  this_imagined_visual_solution_loss,
                  this_direct_visual_solution_loss,
-                 this_reconstructed_solution_loss) = self.run_test_example(
+                 this_reconstructed_solution_loss,
+                 this_direct_solution_thresholded_error) = self.run_test_example(
                      test_exemplar) 
 
                 test_direct_solution_loss += this_direct_solution_loss 
                 test_imagined_visual_solution_loss += this_imagined_visual_solution_loss
                 test_direct_visual_solution_loss += this_direct_visual_solution_loss
                 test_reconstructed_solution_loss += this_reconstructed_solution_loss
+                test_direct_solution_thresholded_error += this_direct_solution_thresholded_error 
 
             num_test = len(test_dataset)
             test_direct_solution_loss /= num_test 
             test_imagined_visual_solution_loss /= num_test
             test_direct_visual_solution_loss /= num_test
             test_reconstructed_solution_loss /= num_test
+            test_direct_solution_thresholded_error /= num_test 
 
             return [test_direct_solution_loss, 
                     test_imagined_visual_solution_loss,
                     test_direct_visual_solution_loss,
-                    test_reconstructed_solution_loss]
+                    test_reconstructed_solution_loss,
+                    test_direct_solution_thresholded_error]
 
         else:
             [test_direct_solution_loss, 
@@ -699,7 +715,8 @@ class consistency_model(object):
              test_direct_solution_direct_visual_solution_closs,
              test_reconstructed_solution_direct_visual_solution_closs,
              test_imagined_visual_visual_reconstruction_closs,
-             test_true_visual_visual_reconstruction_closs] = [0.] * 11
+             test_true_visual_visual_reconstruction_closs,
+             test_direct_solution_thresholded_error] = [0.] * 11
             for test_exemplar in test_dataset:
                 (this_direct_solution_loss, 
                  this_imagined_visual_solution_loss,
@@ -711,7 +728,8 @@ class consistency_model(object):
                  this_direct_solution_direct_visual_solution_closs,
                  this_reconstructed_solution_direct_visual_solution_closs,
                  this_imagined_visual_visual_reconstruction_closs,
-                 this_true_visual_visual_reconstruction_closs) = self.run_test_example(
+                 this_true_visual_visual_reconstruction_closs,
+                 this_direct_solution_thresholded_error) = self.run_test_example(
                     test_exemplar) 
 
                 test_direct_solution_loss += this_direct_solution_loss 
@@ -725,6 +743,7 @@ class consistency_model(object):
                 test_reconstructed_solution_direct_visual_solution_closs += this_reconstructed_solution_direct_visual_solution_closs
                 test_imagined_visual_visual_reconstruction_closs += this_imagined_visual_visual_reconstruction_closs
                 test_true_visual_visual_reconstruction_closs += this_true_visual_visual_reconstruction_closs
+                test_direct_solution_thresholded_error += this_direct_solution_thresholded_error 
 
             num_test = len(test_dataset)
             test_direct_solution_loss /= num_test 
@@ -738,6 +757,8 @@ class consistency_model(object):
             test_reconstructed_solution_direct_visual_solution_closs /= num_test
             test_imagined_visual_visual_reconstruction_closs /= num_test
             test_true_visual_visual_reconstruction_closs /= num_test
+            test_direct_solution_thresholded_error /= num_test 
+
 
             return [test_direct_solution_loss, 
                     test_imagined_visual_solution_loss,
@@ -749,7 +770,8 @@ class consistency_model(object):
                     test_direct_solution_direct_visual_solution_closs,
                     test_reconstructed_solution_direct_visual_solution_closs,
                     test_imagined_visual_visual_reconstruction_closs,
-                    test_true_visual_visual_reconstruction_closs]
+                    test_true_visual_visual_reconstruction_closs,
+                    test_direct_solution_thresholded_error]
 
 
     def run_training(self, train_dataset, test_dataset, nepochs=1000, test_only_main=False):
