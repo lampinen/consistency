@@ -39,6 +39,7 @@ config = {
         "reconstructed_solution_direct_visual_solution_closs": 0.5
     },
     "test_every_k": 5,
+    "zero_pad": True, # pads numbers with zeros to keep placement -> value consistent rather than padding with <PAD>
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
@@ -52,6 +53,8 @@ op_vocab = ["+", "-", "*", "/"]
 control_vocab = ["<PAD>", "<START>"] 
 vocab = number_vocab + op_vocab + control_vocab 
 vocab_dict = dict(zip(vocab, range(len(vocab)))) # index lookup
+input_n_digits = len(str(config["max_n"]))
+output_n_digits = len(str(config["max_n"]**2))
 
 def text_to_indices(text):
     return [vocab_dict[char] for char in text]
@@ -104,16 +107,28 @@ def left_pad_seq(seq, n=config['seq_length'], pad_symbol="<PAD>"):
 
 ## Data generation 
 
+def zero_pad_number(n, num_digits):
+    """(left) zero pads to a given number of digits."""
+    n = str(n)
+    q = num_digits - len(n)
+    return "0"*q + n
+
 def make_multiplication_full_example(n, m):
     """Makes a full data exemplar for learning multiplication (full meaning
     problem, solution, and visual problem)."""
 
-
     sol = n * m
 
-    problem = list(str(n)) + ["*"] + list(str(m))
+    if config['zero_pad']o:
+        problem = list(zero_pad_number(n, input_n_digits)) + ["*"] + list(zero_pad_number(m, input_n_digits)) 
+    else:
+        problem = list(str(n)) + ["*"] + list(str(m))
     problem = np.array([text_to_indices(left_pad_seq(problem))])
-    solution = list(str(sol))
+
+    if config['zero_pad']:
+        solution = list(zero_pad_number(sol, output_n_digits))
+    else:
+        solution = list(str(sol))
     solution = np.array([text_to_indices(right_pad_seq(solution))])
     visual_array = np.array([make_visual_array(n, m, op="*")])
 
@@ -122,13 +137,18 @@ def make_multiplication_full_example(n, m):
 def make_addition_full_example(n, m):
     """Makes a full data exemplar for learning addition (full meaning
     problem, solution, and visual problem)."""
-
-
     sol = n + m
 
-    problem = list(str(n)) + ["*"] + list(str(m))
+    if config['zero_pad']o:
+        problem = list(zero_pad_number(n, input_n_digits)) + ["+"] + list(zero_pad_number(m, input_n_digits)) 
+    else:
+        problem = list(str(n)) + ["+"] + list(str(m))
     problem = np.array([text_to_indices(left_pad_seq(problem))])
-    solution = list(str(sol))
+
+    if config['zero_pad']:
+        solution = list(zero_pad_number(sol, output_n_digits))
+    else:
+        solution = list(str(sol))
     solution = np.array([text_to_indices(right_pad_seq(solution))])
     visual_array = np.array([make_visual_array(n, m, op="+", dim=config["max_n"])])
 
