@@ -119,7 +119,7 @@ def make_multiplication_full_example(n, m):
 
     sol = n * m
 
-    if config['zero_pad']o:
+    if config['zero_pad']:
         problem = list(zero_pad_number(n, input_n_digits)) + ["*"] + list(zero_pad_number(m, input_n_digits)) 
     else:
         problem = list(str(n)) + ["*"] + list(str(m))
@@ -139,7 +139,7 @@ def make_addition_full_example(n, m):
     problem, solution, and visual problem)."""
     sol = n + m
 
-    if config['zero_pad']o:
+    if config['zero_pad']:
         problem = list(zero_pad_number(n, input_n_digits)) + ["+"] + list(zero_pad_number(m, input_n_digits)) 
     else:
         problem = list(str(n)) + ["+"] + list(str(m))
