@@ -72,12 +72,12 @@ def get_examples():
     images = coco.loadImgs(coco.getImgIds()) 
     
     for img in images:
-        img_ann_ids = coco.getAnnIds(imgIds=img_meta["id"])
+        img_ann_ids = coco.getAnnIds(imgIds=img["id"])
         img_anns = coco.loadAnns(img_ann_ids)
         this_datum = {
             "image": img = io.imread("{}/images/{}".format(config["coco_data_dir"],
-                                                           img_meta["file_name"])),
-            "id": img_meta["id"],
+                                                           img["file_name"])),
+            "id": img["id"],
             "captions": [x["caption"] for x in img_anns] 
         }
         data.append(this_datum)
