@@ -83,7 +83,7 @@ def get_examples():
             "image": io.imread("{}/images/{}".format(config["coco_data_dir"],
                                                            img["file_name"])),
             "id": img["id"],
-            "captions": [pad_or_trim(words_to_indices(caption_to_words(x["caption"]), vocab), config["seq_length"]) for x in img_anns] 
+            "captions": [words_to_indices(pad_or_trim(caption_to_words(x["caption"]), config["seq_length"]), vocab) for x in img_anns] 
         }
         data.append(this_datum)
     return data
