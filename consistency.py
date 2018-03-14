@@ -648,7 +648,7 @@ class consistency_model(object):
 		    consistency_exemplars = consistency_dataset[j-10:] + consistency_dataset[:j+1] 
 		else: 
 		    consistency_exemplars = consistency_dataset[j-10:j+1]
-		self.run_unlabelled_consistency_example(consistency_exemplars)
+		self.run_unlabelled_train_example(consistency_exemplars)
 	     
 
     def run_test_example(self, test_exemplar, test_only_main=False):
