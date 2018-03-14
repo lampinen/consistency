@@ -16,7 +16,7 @@ def load_vocabulary_to_index(filename):
        vocab_mapping[word] = index, with indices in order of apperance in file.
     """
     vocab_mapping = {}
-    with open filename as v_file:
+    with open(filename, "r") as v_file:
         for i, line in enumerate(v_file):
             vocab_mapping[line] = i
     return vocab_mapping
