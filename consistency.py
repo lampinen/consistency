@@ -14,32 +14,32 @@ config = {
     "max_n": 64, 
     "add_max_n": 64, 
     "output_seq_length": 4,
-    "char_embedding_dim": 64,
+    "char_embedding_dim": 32,
     "vision_embedding_dim": 256,
     "problem_embedding_dim": 256,
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 4096,
     "init_lr": 0.001,
-    "lr_decay": 0.95,
+    "lr_decay": 0.85,
     "lr_decays_every": 100,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
-        "reconstructed_solution_loss": 0.5,
-        "imagined_visual_solution_loss": 0.5,
+        "reconstructed_solution_loss": 1,
+        "imagined_visual_solution_loss": 1,
 
-        "true_visual_problem_reconstruction_closs": 0.5,
-        "true_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
-        "imagined_visual_problem_reconstruction_closs": 0.5,
-        "imagined_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
+        "true_visual_problem_reconstruction_closs": 1,
+        "true_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
+        "imagined_visual_problem_reconstruction_closs": 1,
+        "imagined_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
 
-        "direct_solution_direct_visual_solution_closs": 0.5,
-        "direct_solution_imagined_visual_solution_closs": 0.5,
-        "reconstructed_solution_direct_visual_solution_closs": 0.5
+        "direct_solution_direct_visual_solution_closs": 1,
+        "direct_solution_imagined_visual_solution_closs": 1,
+        "reconstructed_solution_direct_visual_solution_closs": 1
     },
     "test_every_k": 5,
-    "zero_pad": True, # pads numbers with zeros to keep placement -> value consistent rather than padding with <PAD>
+    "zero_pad": False, # pads numbers with zeros to keep placement -> value consistent rather than padding with <PAD>
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
@@ -620,21 +620,36 @@ class consistency_model(object):
                        self.vision_input_ph: train_exemplars[-7]["visual_array"],
                        self.lr_ph: self.curr_lr})
 
-    def run_train_dataset(self, train_dataset):
-        for i in range(len(train_dataset)):
-            if i < 10: 
-                train_exemplars = train_dataset[i-10:] + train_dataset[:i+1] 
-            else: 
-                train_exemplars = train_dataset[i-10:i+1]
+    def run_train_dataset(self, train_dataset, consistency_dataset=None):
+	if consistency_dataset is not None:
+	    cset_size = len(consistency_dataset)
+	    tset_size = len(train_dataset)
+	for i in range(len(train_dataset)):
+	    if i < 10: 
+		train_exemplars = train_dataset[i-10:] + train_dataset[:i+1] 
+	    else: 
+		train_exemplars = train_dataset[i-10:i+1]
 
-            #assert(len(train_exemplars) == 11)
-            if self.no_visual and (i % self.full_train_every == 0):
-                self.run_basic_train_example(train_exemplars)
-            elif (i % self.full_train_every == 0):
-                self.run_full_train_example(train_exemplars)
-            elif not (self.no_consistency):
-                self.run_unlabelled_train_example(train_exemplars)
-           
+	    #assert(len(train_exemplars) == 11)
+	    if self.no_visual and (i % self.full_train_every == 0):
+		self.run_basic_train_example(train_exemplars)
+	    elif (i % self.full_train_every == 0):
+		self.run_full_train_example(train_exemplars)
+	    elif not (self.no_consistency):
+		self.run_unlabelled_train_example(train_exemplars)
+
+	    # add a dataset to run unlabelled consistency only on (e.g. test dataset)
+	    if consistency_dataset is not None: 
+		j = tset_size - i
+		if j > cset_size:
+		    continue # consistency train on unlabelled data after last cset_size examples of tset
+
+		if j < 10: 
+		    consistency_exemplars = consistency_dataset[j-10:] + consistency_dataset[:j+1] 
+		else: 
+		    consistency_exemplars = consistency_dataset[j-10:j+1]
+		self.run_unlabelled_consistency_example(consistency_exemplars)
+	     
 
     def run_test_example(self, test_exemplar, test_only_main=False):
         if self.no_visual or test_only_main:
@@ -807,7 +822,7 @@ class consistency_model(object):
         print(test_losses[-1])
         for epoch in range(nepochs):
 #            np.random.shuffle(train_dataset)
-            self.run_train_dataset(train_dataset)
+            self.run_train_dataset(train_dataset, consistency_dataset=test_dataset)
             if epoch % config["test_every_k"] == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
                 test_losses.append(self.run_test_dataset(test_dataset, test_only_main=True))
