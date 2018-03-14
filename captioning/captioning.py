@@ -80,8 +80,8 @@ def get_examples():
         img_ann_ids = coco.getAnnIds(imgIds=img["id"])
         img_anns = coco.loadAnns(img_ann_ids)
         this_datum = {
-            "image": io.imread("{}/images/{}".format(config["coco_data_dir"],
-                                                           img["file_name"])),
+            "image_name": "{}/images/{}".format(config["coco_data_dir"],
+                                                img["file_name"]),
             "id": img["id"],
             "captions": [words_to_indices(pad_or_trim(caption_to_words(x["caption"]), config["seq_length"]), vocab) for x in img_anns] 
         }
