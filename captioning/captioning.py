@@ -23,7 +23,7 @@ config = {
     "coco_data_type": "train2014",
     "coco_val_data_type": "val2014",
     "image_width": 299,
-    "seq_length": 5,
+    "sequence_length": 30,
     "word_embedding_dim": 128,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
     "hidden_dim": 512,
@@ -87,7 +87,7 @@ def get_examples(n=None):
             "image_name": "{}/images/{}".format(config["coco_data_dir"],
                                                 img["file_name"]),
             "id": img["id"],
-            "captions": [words_to_indices(pad_or_trim(caption_to_words(x["caption"]), config["seq_length"]), vocab) for x in img_anns] 
+            "captions": [words_to_indices(pad_or_trim(caption_to_words(x["caption"]), config["sequence_length"]), vocab) for x in img_anns] 
         }
         data.append(this_datum)
     return data
@@ -153,7 +153,7 @@ class captioning_model(object):
                         "output_to_emb_output",
                         [config['hidden_size'], config['word_embedding_dim']],
                         tf.float32)
-                    for step in range(config['seq_length']):
+                    for step in range(config['sequence_length']):
                         (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output)
                         this_word_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
