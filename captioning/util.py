@@ -16,10 +16,14 @@ def load_vocabulary_to_index(filename):
        vocab_mapping[word] = index, with indices in order of apperance in file.
     """
     vocab_mapping = {}
+    backward_vocab = []
     with open(filename, "r") as v_file:
         for i, line in enumerate(v_file):
-            vocab_mapping[line.rstrip()] = i
-    return vocab_mapping, i + 1 # second term is length of vocabulary
+            word = line.rstrip()
+            vocab_mapping[word] = i
+            backward_vocab.append(word)
+
+    return vocab_mapping, backward_vocab, i + 1 # last term is length of vocabulary
 
 def words_to_indices(words, vocabulary, unk_token="<UNK>"):
     """Converts words to indices, handling unknowns.""" 
