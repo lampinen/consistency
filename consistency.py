@@ -17,12 +17,12 @@ config = {
     "char_embedding_dim": 64,
     "vision_embedding_dim": 256,
     "problem_embedding_dim": 256,
-    "rnn_num_layers": 3,
+    "rnn_num_layers": 4,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 4096,
     "init_lr": 0.001,
-    "lr_decay": 0.85,
-    "lr_decays_every": 100,
+    "lr_decay": 0.95,
+    "lr_decays_every": 50,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,

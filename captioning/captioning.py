@@ -14,10 +14,13 @@ from tensorflow.contrib.framework import arg_scope
 
 from pycocotools.coco import COCO
 
+from util import *
+
 ## config
 config = {
     "no_consistency": False,
     "coco_data_dir": "/home/lampinen/Documents/data/coco/",
+    "vocabulary_filename": "./vocabulary.csv",
     "coco_data_type": "train2014",
     "coco_val_data_type": "val2014",
     "image_width": 299,
@@ -57,6 +60,8 @@ coco_val = COCO(val_ann_filename)
 #img_ann_ids = coco.getAnnIds(imgIds=img_meta["id"])
 #img_anns = coco.loadAnns(img_ann_ids)
 
+vocab = load_vocabulary_to_index(config["vocabulary_filename"])
+
 ########## Data processing ####################################################
 
 def rescale_image(image):
@@ -75,10 +80,10 @@ def get_examples():
         img_ann_ids = coco.getAnnIds(imgIds=img["id"])
         img_anns = coco.loadAnns(img_ann_ids)
         this_datum = {
-            "image": img = io.imread("{}/images/{}".format(config["coco_data_dir"],
-                                                           img["file_name"])),
+            "image_name": "{}/images/{}".format(config["coco_data_dir"],
+                                                img["file_name"]),
             "id": img["id"],
-            "captions": [x["caption"] for x in img_anns] 
+            "captions": [words_to_indices(pad_or_trim(caption_to_words(x["caption"]), config["seq_length"]), vocab) for x in img_anns] 
         }
         data.append(this_datum)
     return data

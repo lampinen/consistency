@@ -16,9 +16,9 @@ def load_vocabulary_to_index(filename):
        vocab_mapping[word] = index, with indices in order of apperance in file.
     """
     vocab_mapping = {}
-    with open filename as v_file:
+    with open(filename, "r") as v_file:
         for i, line in enumerate(v_file):
-            vocab_mapping[line] = i
+            vocab_mapping[line.rstrip()] = i
     return vocab_mapping
 
 def words_to_indices(words, vocabulary, unk_token="<UNK>"):
@@ -30,9 +30,9 @@ def pad_or_trim(words, length, right=True, pad_token="<PAD>"):
     curr_length = len(words)
     if curr_length > length:
         if right:
-            words = words[:-(curr_length-length)]
+            words = words[:length]
         else:
-            words = words[(curr_length-length):]
+            words = words[-length:]
     else:
         if right:
             words = words + ["<PAD>"] * (curr_length-length) 
