@@ -90,8 +90,47 @@ def get_examples():
 
 train_data = get_examples()
 
+    
+
 ########## Model building #####################################################
 
 class captioning_model(object):
     def __init__(self, no_consistency=False):
-        pass
+        self.image_ph = tf.placeholder(tf.float32, [config["batch_size"], config["image_width"], config["image_width"], 3]) 
+        self.caption_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
+        self.caption2_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
+        
+        # perception
+        def __build_perception_network(visual_input)
+            with tf.variable_scope('perception'):
+                with arg_scope(inception.inception_v3_arg_scope(use_fused_batchnorm=False)):
+                    inception_features, _ = inception.inception_v3_base(visual_input)
+		
+
+
+
+
+        # TODO: this for all perception
+        # set to initialize vision network from checkpoint
+        tf.contrib.framework.init_from_checkpoint(
+            model_config['vision_checkpoint_location'],
+            {'InceptionV3/': 'InceptionV3/'})
+ 
+
+
+
+
+    def __example_to_feeddicts(self, example):
+        img = io.imread(example["image_name"]) 
+        img = resize_image(rescale_image(img))
+        captions = example["captions"] 
+        np.random.shuffle(captions)
+        feed_dict = {
+             self.image_ph: img, 
+             self.caption_ph: captions[0],
+             self.caption2_ph: captions[1]
+        }
+        return feed_dict
+
+    def run_train_exemplar(self, exemplar):
+       pass 
