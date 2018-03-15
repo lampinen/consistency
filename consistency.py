@@ -14,7 +14,7 @@ config = {
     "max_n": 64, 
     "add_max_n": 64, 
     "output_seq_length": 4,
-    "char_embedding_dim": 32,
+    "char_embedding_dim": 64,
     "vision_embedding_dim": 256,
     "problem_embedding_dim": 256,
     "rnn_num_layers": 3,
@@ -39,6 +39,7 @@ config = {
         "reconstructed_solution_direct_visual_solution_closs": 1
     },
     "test_every_k": 5,
+    "training_keep_prob": 0.5, # dropout prob during traiing
     "zero_pad": False, # pads numbers with zeros to keep placement -> value consistent rather than padding with <PAD>
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
@@ -172,17 +173,20 @@ class consistency_model(object):
         self.lr_decay = config["lr_decay"]
         self.lr_decays_every = config["lr_decays_every"]
 
-        self.vocab_size = vocab_size = len(vocab)
+        self.vocab_size = vocab_size = len(vocab) 
 
         with tf.variable_scope('problem'):
             embedding_size = config['char_embedding_dim']
             input_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size], -0.1/embedding_size, 0.1/embedding_size)) 
             output_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size], -0.1/embedding_size, 0.1/embedding_size)) 
 
-        def build_problem_processing_net(embedded_input, reuse=True):
+        def build_problem_processing_net(embedded_input, reuse=True, keep_ph=None):
             """Processes problem from char embeddings"""
             with tf.variable_scope('problem/reading', reuse=reuse):
-                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+		if keep_ph is not None:
+		    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+		else:
+		    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
             
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
@@ -193,18 +197,21 @@ class consistency_model(object):
 
             return output
         
-        def build_problem_reading_net(problem_input, reuse=True):
+        def build_problem_reading_net(problem_input, reuse=True, keep_ph=None):
             """Reads problem and processes"""
             with tf.variable_scope('problem/reading', reuse=reuse):
                 embedded_input = tf.nn.embedding_lookup(input_embeddings, problem_input)
-            output = build_problem_processing_net(embedded_input, reuse=reuse)
+            output = build_problem_processing_net(embedded_input, reuse=reuse, keep_ph=keep_ph)
             return output
 
-        def build_problem_solution_net(problem_embedding, reuse=True):
+        def build_problem_solution_net(problem_embedding, reuse=True, keep_ph=None):
             """Solves problem from problem embedding"""
             with tf.variable_scope('problem/solution', reuse=reuse):
+		if keep_ph is not None:
+		    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+		else:
+		    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
 
-                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
@@ -230,6 +237,7 @@ class consistency_model(object):
                 return char_logits 
 
         self.lr_ph  = tf.placeholder(tf.float32)
+	self.keep_ph = tf.placeholder(tf.float32)
         self.problem_input_ph = tf.placeholder(tf.int32,
                                                [None, config['seq_length']])
         self.solution_input_ph = tf.placeholder(tf.int32,
@@ -238,9 +246,11 @@ class consistency_model(object):
                                            vocab_size) 
 
         problem_embedding = build_problem_reading_net(self.problem_input_ph,
-                                                      reuse=False)
+                                                      reuse=False,
+						      keep_ph=self.keep_ph)
         direct_solution_logits = build_problem_solution_net(problem_embedding,
-                                                            reuse=False)
+                                                            reuse=False,
+							    keep_ph=self.keep_ph)
         direct_solution_softmax = tf.nn.softmax(direct_solution_logits)
 
         self.direct_solution_loss = tf.nn.softmax_cross_entropy_with_logits(
@@ -265,13 +275,14 @@ class consistency_model(object):
             self.sess.run(tf.global_variables_initializer())
             return
 
-        def build_imagination_net(problem_embedding, reuse=True):
+        def build_imagination_net(problem_embedding, reuse=True, keep_ph=None):
             """Generates "imaginary" visual array from a problem embedding"""
             with tf.variable_scope('imagination', reuse=reuse):
                 # fully connected 
                 net = problem_embedding
                 net = slim.layers.fully_connected(net, 1 * 1 * 128, activation_fn=tf.nn.relu)
                 net = tf.reshape(net, [-1, 1, 1, 128])
+		net = tf.nn.dropout(net, keep_ph)
                 #print(net.get_shape())
 
                 # 3
@@ -279,22 +290,25 @@ class consistency_model(object):
                 #print(net.get_shape())
                 net = slim.layers.conv2d_transpose(net, 64, [4, 4], stride=2)
                 #print(net.get_shape())
+		net = tf.nn.dropout(net, keep_ph)
 
                 # 2
                 net = tf.image.resize_bilinear(net, [8, 8])
                 #print(net.get_shape())
                 net = slim.layers.conv2d_transpose(net, 32, [4, 4], stride=2)
                 #print(net.get_shape())
+		net = tf.nn.dropout(net, keep_ph)
 
                 # 1
                 net = tf.image.resize_bilinear(net, [32, 32])
                 #print(net.get_shape())
                 net = slim.layers.conv2d_transpose(net, 2, [4, 4], stride=2)
                 #print(net.get_shape())
+		net = tf.nn.dropout(net, keep_ph)
                 return net
 
 
-        def build_perception_net(perception_input, reuse=True): 
+        def build_perception_net(perception_input, reuse=True, keep_ph=None): 
             """Generates perceptual embedding of visual array"""
             with tf.variable_scope('perception', reuse=reuse):
                 # 1
@@ -302,15 +316,18 @@ class consistency_model(object):
                 #print(net.get_shape())
                 net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
                 #print(net.get_shape())
+		net = tf.nn.dropout(net, keep_ph)
                 # 2
                 net = slim.layers.conv2d(net, 64, [4, 4], stride=2)
                 #print(net.get_shape())
                 net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
                 #print(net.get_shape())
+		net = tf.nn.dropout(net, keep_ph)
                 # 3
                 net = slim.layers.conv2d(net, 128, [4, 4], stride=2)
                 #print(net.get_shape())
                 net = slim.layers.avg_pool2d(net, [2, 2], stride=2)
+		net = tf.nn.dropout(net, keep_ph)
                 # fc
                 #print(net.get_shape())
                 net = slim.flatten(net)
@@ -318,11 +335,13 @@ class consistency_model(object):
                 return representation
 
 
-        def build_perceptual_solution_net(vision_embedding, reuse=True):
+        def build_perceptual_solution_net(vision_embedding, reuse=True, keep_ph=None):
             """Solves problem from visual embedding"""
             with tf.variable_scope('perception/solution', reuse=reuse):
-
-                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+		if keep_ph is not None:
+		    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+		else:
+		    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
@@ -350,9 +369,10 @@ class consistency_model(object):
         # visual path
         self.vision_input_ph = tf.placeholder(tf.float32, [None, 64, 64, 2])
         visual_input_embedding = build_perception_net(self.vision_input_ph,
-                                                      reuse=False)
+                                                      reuse=False,
+						      keep_ph=self.keep_ph)
         direct_visual_solution_logits = build_perceptual_solution_net(
-            visual_input_embedding, reuse=False) 
+            visual_input_embedding, reuse=False, keep_ph=self.keep_ph) 
         direct_visual_solution_softmax = tf.nn.softmax(
             direct_visual_solution_logits)
 
@@ -367,10 +387,12 @@ class consistency_model(object):
 
         # imagined path
         imagined_visual_scene = build_imagination_net(problem_embedding,
-                                                      reuse=False) 
-        imagined_visual_embedding = build_perception_net(imagined_visual_scene)
+                                                      reuse=False,
+						      keep_ph=self.keep_ph) 
+        imagined_visual_embedding = build_perception_net(imagined_visual_scene,
+							 keep_ph=self.keep_ph)
         imagined_visual_solution_logits = build_perceptual_solution_net(
-            imagined_visual_embedding)
+            imagined_visual_embedding, keep_ph=self.keep_ph)
 
         imagined_visual_solution_softmax = tf.nn.softmax(
             imagined_visual_solution_logits)
@@ -384,11 +406,14 @@ class consistency_model(object):
         self.imagined_visual_solution_train = optimizer.minimize(
             this_weight * self.imagined_visual_solution_loss)
 
-        def build_perceptual_problem_reconstruction_net(vision_embedding, ground_truth, reuse=True):
+        def build_perceptual_problem_reconstruction_net(vision_embedding, ground_truth, reuse=True, keep_ph=None):
             """Reconstructs problem from visual embedding"""
             with tf.variable_scope('perception/problem_reconstruction', reuse=reuse):
+		if keep_ph is not None:
+		    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+		else:
+		    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
 
-                cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])]) 
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
                 char_logits = []
@@ -417,16 +442,18 @@ class consistency_model(object):
                 return char_logits, emb_outputs 
 
         # reconstructed problem path
-        problem_input_embeddings = tf.nn.embedding_lookup(input_embeddings, self.problem_input_ph) # the choice to use output embeddings here reflects the fact that students might be verbally asked to produce such an answer, but a different choice could be made
+        problem_input_embeddings = tf.nn.embedding_lookup(input_embeddings,
+							  self.problem_input_ph,
+							  self.keep_ph) # the choice to use output embeddings here reflects the fact that students might be verbally asked to produce such an answer, but a different choice could be made
         (true_visual_problem_reconstruction_logits,
          true_visual_problem_reconstruction) = build_perceptual_problem_reconstruction_net(
              visual_input_embedding, problem_input_embeddings, reuse=False)
 
 
         reconstructed_problem_embedding = build_problem_processing_net(
-            true_visual_problem_reconstruction)
+            true_visual_problem_reconstruction, keep_ph=self.keep_ph)
         reconstructed_direct_solution_logits = build_problem_solution_net(
-            reconstructed_problem_embedding)
+            reconstructed_problem_embedding, keep_ph=self.keep_ph)
                                                             
         reconstructed_solution_softmax = tf.nn.softmax(direct_solution_logits)
 
@@ -463,7 +490,7 @@ class consistency_model(object):
         # vision -> reconstructed problem = ground truth problem
         (true_visual_problem_reconstruction_logits,
          true_visual_problem_reconstruction) = build_perceptual_problem_reconstruction_net(
-             visual_input_embedding, problem_input_embeddings)
+             visual_input_embedding, problem_input_embeddings, keep_ph=self.keep_ph)
         self.true_visual_problem_reconstruction_closs = tf.nn.softmax_cross_entropy_with_logits(
             labels=problem_input_onehot, logits=true_visual_problem_reconstruction_logits) 
         self.true_visual_problem_reconstruction_closs = tf.reduce_mean(
@@ -476,7 +503,7 @@ class consistency_model(object):
         # ground_truth_problem -> imagined visual -> reconstructed problem = ground truth problem
         (imagined_visual_problem_reconstruction_logits,
          imagined_visual_problem_reconstruction) = build_perceptual_problem_reconstruction_net(
-             imagined_visual_embedding, problem_input_embeddings)
+             imagined_visual_embedding, problem_input_embeddings, keep_ph=self.keep_ph)
         self.imagined_visual_problem_reconstruction_closs = tf.nn.softmax_cross_entropy_with_logits(
             labels=problem_input_onehot, logits=imagined_visual_problem_reconstruction_logits) 
         self.imagined_visual_problem_reconstruction_closs = tf.reduce_mean(
@@ -495,7 +522,7 @@ class consistency_model(object):
 
         # true visual -> reconstructed problem -> imagined visual = true visual 
         reconstructed_imagined_visual_scene = build_imagination_net(
-            reconstructed_problem_embedding)
+            reconstructed_problem_embedding, keep_ph=self.keep_ph)
         self.true_visual_visual_reconstruction_closs = tf.nn.l2_loss(
             reconstructed_imagined_visual_scene - self.vision_input_ph)
         
@@ -576,19 +603,23 @@ class consistency_model(object):
                 self.direct_solution_train,
                 feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
                            self.solution_input_ph: train_exemplars[0]["solution"],
-                           self.lr_ph: self.curr_lr})
+                           self.lr_ph: self.curr_lr,
+			   self.keep_ph: config["training_keep_prob"]})
+
         elif self.no_consistency:
             self.sess.run(
                 self.visual_full_basic_train,
                 feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
                            self.solution_input_ph: train_exemplars[0]["solution"],
-                           self.lr_ph: self.curr_lr})
+                           self.lr_ph: self.curr_lr,
+			   self.keep_ph: config["training_keep_prob"]})
         else:
             self.sess.run(
                 self.consistency_full_basic_train,
                 feed_dict={self.problem_input_ph: train_exemplars[0]["problem"],
                            self.solution_input_ph: train_exemplars[0]["solution"],
-                           self.lr_ph: self.curr_lr})
+                           self.lr_ph: self.curr_lr,
+			   self.keep_ph: config["training_keep_prob"]})
 
 
     def run_full_train_example(self, train_exemplars):
@@ -600,14 +631,16 @@ class consistency_model(object):
                 feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
                            self.vision_input_ph: train_exemplars[-1]["visual_array"],
                            self.solution_input_ph: train_exemplars[-1]["solution"],
-                           self.lr_ph: self.curr_lr})
+                           self.lr_ph: self.curr_lr,
+			   self.keep_ph: config["training_keep_prob"]})
         else:
             self.sess.run(
                 self.consistency_full_train,
                 feed_dict={self.problem_input_ph: train_exemplars[-1]["problem"],
                            self.vision_input_ph: train_exemplars[-1]["visual_array"],
                            self.solution_input_ph: train_exemplars[-1]["solution"],
-                           self.lr_ph: self.curr_lr})
+                           self.lr_ph: self.curr_lr,
+			   self.keep_ph: config["training_keep_prob"]})
 
 
     def run_unlabelled_train_example(self, train_exemplars):
@@ -618,7 +651,8 @@ class consistency_model(object):
             self.unlabelled_full_train,
             feed_dict={self.problem_input_ph: train_exemplars[-7]["problem"],
                        self.vision_input_ph: train_exemplars[-7]["visual_array"],
-                       self.lr_ph: self.curr_lr})
+                       self.lr_ph: self.curr_lr,
+		       self.keep_ph: config["training_keep_prob"]})
 
     def run_train_dataset(self, train_dataset, consistency_dataset=None):
 	if consistency_dataset is not None:
@@ -657,7 +691,8 @@ class consistency_model(object):
                 [self.direct_solution_loss,
                 self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
-                           self.solution_input_ph: test_exemplar["solution"]})
+                           self.solution_input_ph: test_exemplar["solution"],
+			   self.keep_ph: 1.})
 
 
         elif self.no_consistency:
@@ -669,7 +704,8 @@ class consistency_model(object):
                  self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
                            self.vision_input_ph: test_exemplar["visual_array"],
-                           self.solution_input_ph: test_exemplar["solution"]})
+                           self.solution_input_ph: test_exemplar["solution"],
+			   self.keep_ph: 1.})
 
         else:
             this_exemplar_losses = self.sess.run(
@@ -687,7 +723,8 @@ class consistency_model(object):
                  self.direct_solution_thresholded_error],
                 feed_dict={self.problem_input_ph: test_exemplar["problem"],
                            self.vision_input_ph: test_exemplar["visual_array"],
-                           self.solution_input_ph: test_exemplar["solution"]})
+                           self.solution_input_ph: test_exemplar["solution"],
+			   self.keep_ph: 1.})
 
         return this_exemplar_losses 
 
