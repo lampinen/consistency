@@ -30,6 +30,7 @@ coco = COCO(ann_filename)
 def get_vocab():
     """gets vocabulary from train examples"""
     vocab = Counter()
+    lengths = Counter()
     images = coco.loadImgs(coco.getImgIds()) 
     
     for img in images:
@@ -38,7 +39,10 @@ def get_vocab():
         img_anns = coco.loadAnns(img_ann_ids)
         for ann in img_anns:
             words = caption_to_words(ann['caption'])
+            lengths.update([len(words)])
+
             vocab.update(words)
+    print(lengths.most_common())
     return vocab
 
 vocabulary = get_vocab()
