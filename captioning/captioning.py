@@ -111,7 +111,7 @@ class captioning_model(object):
         self.optimizer = tf.train.AdamOptimizer(self.lr_ph) 
         
         # perception
-        def _build_perception_network(visual_input)
+        def _build_perception_network(visual_input):
             with tf.variable_scope('perception'):
                 with arg_scope(inception.inception_v3_arg_scope(use_fused_batchnorm=False)):
                     inception_features, _ = inception.inception_v3_base(visual_input)
@@ -131,7 +131,7 @@ class captioning_model(object):
             output_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
                                                               -0.1/embedding_size, 0.1/embedding_size))
 
-        def build_captioning_net(image_rep, reuse=True, keep_ph=None):
+        def _build_captioning_net(image_rep, reuse=True, keep_ph=None):
             """Solves problem from problem embedding"""
             with tf.variable_scope('captioning', reuse=reuse):
                 if keep_ph is not None:
