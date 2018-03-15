@@ -51,8 +51,9 @@ print("saving vocab with cutoff = %i" % config["vocab_appearance_cutoff"])
 
 vocab_appearance_cutoff = config["vocab_appearance_cutoff"]
 with open("vocabulary.csv", "w") as v_file:
-    v_file.write("<PAD>\n")
     v_file.write("<UNK>\n")
+    v_file.write("<PAD>\n")
+    v_file.write("<START>\n")
     for word, count in vocabulary.most_common():
         if count < vocab_appearance_cutoff:
             break

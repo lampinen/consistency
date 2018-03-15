@@ -19,7 +19,7 @@ def load_vocabulary_to_index(filename):
     with open(filename, "r") as v_file:
         for i, line in enumerate(v_file):
             vocab_mapping[line.rstrip()] = i
-    return vocab_mapping
+    return vocab_mapping, i + 1 # second term is length of vocabulary
 
 def words_to_indices(words, vocabulary, unk_token="<UNK>"):
     """Converts words to indices, handling unknowns.""" 

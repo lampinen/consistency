@@ -60,7 +60,7 @@ coco_val = COCO(val_ann_filename)
 #img_ann_ids = coco.getAnnIds(imgIds=img_meta["id"])
 #img_anns = coco.loadAnns(img_ann_ids)
 
-vocab = load_vocabulary_to_index(config["vocabulary_filename"])
+vocab, vocab_size = load_vocabulary_to_index(config["vocabulary_filename"])
 
 ########## Data processing ####################################################
 
@@ -101,12 +101,52 @@ class captioning_model(object):
         self.caption2_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
         
         # perception
-        def __build_perception_network(visual_input)
+        def _build_perception_network(visual_input)
             with tf.variable_scope('perception'):
                 with arg_scope(inception.inception_v3_arg_scope(use_fused_batchnorm=False)):
                     inception_features, _ = inception.inception_v3_base(visual_input)
-		
 
+        self.image_rep = _build_perception_network(self.image_ph)
+
+
+        # captioning
+	embedding_size = config['word_embedding_dim']
+	input_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
+							 -0.1/embedding_size, 0.1/embedding_size))
+	output_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
+							  -0.1/embedding_size, 0.1/embedding_size))
+
+        def build_captioning_net(image_rep, reuse=True, keep_ph=None):
+            """Solves problem from problem embedding"""
+            with tf.variable_scope('captioning', reuse=reuse):
+                if keep_ph is not None:
+                    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+                else:
+                    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+
+                stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])])
+                start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
+                char_logits = []
+
+                state = stacked_cell.zero_state(config['batch_size'], tf.float32)
+                state = tuple([tf.contrib.rnn.LSTMStateTuple(image_rep, state[0][1])] + [state[i] for i in range(1, len(state))])
+
+                emb_output = tf.reshape(start_token, [config['batch_size'], -1])
+
+                with tf.variable_scope("recurrence", reuse=reuse):
+                    output_to_emb_output = tf.get_variable(
+                        "output_to_emb_output",
+                        [config['image_embedding_dim'], config['word_embedding_dim']],
+                        tf.float32)
+                    for step in range(config['seq_length']):
+                        (output, state) = stacked_cell(emb_output, state)
+                        emb_output = tf.matmul(output, output_to_emb_output)
+                        this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
+                        char_logits.append(this_char_logits)
+                        tf.get_variable_scope().reuse_variables()
+
+                char_logits = tf.stack(char_logits, axis=1)
+                return char_logits
 
 
 
@@ -114,13 +154,10 @@ class captioning_model(object):
         # set to initialize vision network from checkpoint
         tf.contrib.framework.init_from_checkpoint(
             model_config['vision_checkpoint_location'],
-            {'InceptionV3/': 'InceptionV3/'})
+            {'InceptionV3/': 'perception/InceptionV3/'})
  
 
-
-
-
-    def __example_to_feeddicts(self, example):
+    def __example_to_feeddict(self, example):
         img = io.imread(example["image_name"]) 
         img = resize_image(rescale_image(img))
         captions = example["captions"] 
