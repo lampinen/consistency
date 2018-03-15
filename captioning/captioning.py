@@ -122,9 +122,9 @@ class captioning_model(object):
         self.image_rep = _build_perception_network(self.image_ph)
 
         # captioning
-	embedding_size = config['word_embedding_dim']
-	input_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
-							 -0.1/embedding_size, 0.1/embedding_size))
+        embedding_size = config['word_embedding_dim']
+        input_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
+                                                         -0.1/embedding_size, 0.1/embedding_size))
         if config["shared_word_embeddings"]:
             output_embeddings = input_embeddings
         else:
