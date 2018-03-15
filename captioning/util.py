@@ -29,6 +29,10 @@ def words_to_indices(words, vocabulary, unk_token="<UNK>"):
     """Converts words to indices, handling unknowns.""" 
     return [vocabulary[word] if word in vocabulary else vocabulary[unk_token] for word in words]
 
+def indices_to_words(indices, backward_vocabulary, unk_token="<UNK>"):
+    """Converts words to indices, handling unknowns.""" 
+    return [backward_vocabulary[index] for index in indices]
+
 def pad_or_trim(words, length, right=True, pad_token="<PAD>"):
     """Pads or trims to fixed length, on left or right side."""
     curr_length = len(words)
