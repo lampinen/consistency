@@ -19,6 +19,7 @@ from util import *
 config = {
     "no_consistency": False,
     "coco_data_dir": "/home/lampinen/Documents/data/coco/",
+    "vision_checkpoint_location": "./inception_v3.ckpt",
     "vocabulary_filename": "./vocabulary.csv",
     "coco_data_type": "train2014",
     "coco_val_data_type": "val2014",
@@ -26,7 +27,7 @@ config = {
     "sequence_length": 30,
     "word_embedding_dim": 128,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
-    "hidden_dim": 512,
+    "hidden_size": 512,
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "init_lr": 0.001,
@@ -113,10 +114,11 @@ class captioning_model(object):
         # perception
         def _build_perception_network(visual_input):
             with tf.variable_scope('perception'):
-                with arg_scope(inception.inception_v3_arg_scope(use_fused_batchnorm=False)):
+                with arg_scope(inception.inception_v3_arg_scope()):
                     inception_features, _ = inception.inception_v3_base(visual_input)
 
-                net = slim.layers.fully_connected(inception_features, config["hidden_size"], activation_fn=tf.nn.relu)
+                net = slim.flatten(inception_features)
+                net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
                 return net
 
         self.image_rep = _build_perception_network(self.image_ph)
@@ -140,7 +142,7 @@ class captioning_model(object):
                     cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['hidden_size'])
 
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])])
-                start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
+                start_token = tf.nn.embedding_lookup(output_embeddings, vocab["<START>"])
                 word_logits = []
 
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
@@ -163,17 +165,17 @@ class captioning_model(object):
                 word_logits = tf.stack(word_logits, axis=1)
                 return word_logits
 
-        self.caption_logits = _build_captioning_net(image_rep, reuse=False, keep_ph=self.keep_ph) 
+        self.caption_logits = _build_captioning_net(self.image_rep, reuse=False, keep_ph=self.keep_ph) 
         self.caption_hardmax = tf.argmax(self.caption_logits, axis=-1)
 
-        self.caption_loss = tf.nn.softmax_cross_entropy_with_logits(self.caption_logits, self.caption_ph)
+        self.caption_loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.caption_logits, labels=tf.one_hot(self.caption_ph, depth=vocab_size))
         self.caption_train = self.optimizer.minimize(self.caption_loss)
 
 
         # init, etc.
         # set to initialize vision network from checkpoint
         tf.contrib.framework.init_from_checkpoint(
-            model_config['vision_checkpoint_location'],
+            config['vision_checkpoint_location'],
             {'InceptionV3/': 'perception/InceptionV3/'})
 
         sess_config = tf.ConfigProto()
