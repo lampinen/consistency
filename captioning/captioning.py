@@ -8,7 +8,6 @@ import skimage.transform as transform
 
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
-import tensorflow.contrib.slim as slim
 from tensorflow.contrib.slim.nets import inception
 from tensorflow.contrib.framework import arg_scope
 
@@ -26,7 +25,8 @@ config = {
     "image_width": 299,
     "seq_length": 5,
     "word_embedding_dim": 128,
-    "hidden_dim": 256,
+    "shared_word_embeddings": True, # whether input and output embeddings are the same or different
+    "hidden_dim": 512,
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "init_lr": 0.001,
@@ -60,7 +60,7 @@ coco_val = COCO(val_ann_filename)
 #img_ann_ids = coco.getAnnIds(imgIds=img_meta["id"])
 #img_anns = coco.loadAnns(img_ann_ids)
 
-vocab, vocab_size = load_vocabulary_to_index(config["vocabulary_filename"])
+vocab, backward_vocab, vocab_size = load_vocabulary_to_index(config["vocabulary_filename"])
 
 ########## Data processing ####################################################
 
@@ -72,9 +72,13 @@ def resize_image(image):
     """Resizes to [299, 299] for inception"""
     return transform.resize(image, [config["image_width"], config["image_width"]])
 
-def get_examples():
+def get_examples(n=None):
+    """Gets n examples from coco data, or all if n is None"""
     data = []
-    images = coco.loadImgs(coco.getImgIds()) 
+    images = coco.getImgIds()
+    if n is not None:
+        images = images[:n]
+    images = coco.loadImgs(images) 
     
     for img in images:
         img_ann_ids = coco.getAnnIds(imgIds=img["id"])
@@ -98,7 +102,13 @@ class captioning_model(object):
     def __init__(self, no_consistency=False):
         self.image_ph = tf.placeholder(tf.float32, [config["batch_size"], config["image_width"], config["image_width"], 3]) 
         self.caption_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
+        self.mask_ph =  tf.placeholder(tf.bool, [config["batch_size"], config["sequence_length"]]) 
         self.caption2_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
+        self.mask2_ph =  tf.placeholder(tf.bool, [config["batch_size"], config["sequence_length"]]) 
+        self.lr_ph = tf.placeholder(tf.float32)
+        self.keep_ph = tf.placeholder(tf.float32)
+
+        self.optimizer = tf.train.AdamOptimizer(self.lr_ph) 
         
         # perception
         def _build_perception_network(visual_input)
@@ -106,27 +116,32 @@ class captioning_model(object):
                 with arg_scope(inception.inception_v3_arg_scope(use_fused_batchnorm=False)):
                     inception_features, _ = inception.inception_v3_base(visual_input)
 
-        self.image_rep = _build_perception_network(self.image_ph)
+                net = slim.layers.fully_connected(inception_features, config["hidden_size"], activation_fn=tf.nn.relu)
+                return net
 
+        self.image_rep = _build_perception_network(self.image_ph)
 
         # captioning
 	embedding_size = config['word_embedding_dim']
 	input_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
 							 -0.1/embedding_size, 0.1/embedding_size))
-	output_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
-							  -0.1/embedding_size, 0.1/embedding_size))
+        if config["shared_word_embeddings"]:
+            output_embeddings = input_embeddings
+        else:
+            output_embeddings = tf.Variable(tf.random_uniform([vocab_size, embedding_size],
+                                                              -0.1/embedding_size, 0.1/embedding_size))
 
         def build_captioning_net(image_rep, reuse=True, keep_ph=None):
             """Solves problem from problem embedding"""
             with tf.variable_scope('captioning', reuse=reuse):
                 if keep_ph is not None:
-                    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim']), output_keep_prob=keep_ph)
+                    cell = lambda: tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.BasicLSTMCell(config['hidden_size']), output_keep_prob=keep_ph)
                 else:
-                    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['problem_embedding_dim'])
+                    cell = lambda: tf.contrib.rnn.BasicLSTMCell(config['hidden_size'])
 
                 stacked_cell = tf.contrib.rnn.MultiRNNCell([cell() for _ in range(config['rnn_num_layers'])])
                 start_token = tf.nn.embedding_lookup(output_embeddings, vocab_dict["<START>"])
-                char_logits = []
+                word_logits = []
 
                 state = stacked_cell.zero_state(config['batch_size'], tf.float32)
                 state = tuple([tf.contrib.rnn.LSTMStateTuple(image_rep, state[0][1])] + [state[i] for i in range(1, len(state))])
@@ -136,28 +151,39 @@ class captioning_model(object):
                 with tf.variable_scope("recurrence", reuse=reuse):
                     output_to_emb_output = tf.get_variable(
                         "output_to_emb_output",
-                        [config['image_embedding_dim'], config['word_embedding_dim']],
+                        [config['hidden_size'], config['word_embedding_dim']],
                         tf.float32)
                     for step in range(config['seq_length']):
                         (output, state) = stacked_cell(emb_output, state)
                         emb_output = tf.matmul(output, output_to_emb_output)
-                        this_char_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
-                        char_logits.append(this_char_logits)
+                        this_word_logits = tf.matmul(emb_output, tf.transpose(output_embeddings))
+                        word_logits.append(this_word_logits)
                         tf.get_variable_scope().reuse_variables()
 
-                char_logits = tf.stack(char_logits, axis=1)
-                return char_logits
+                word_logits = tf.stack(word_logits, axis=1)
+                return word_logits
+
+        self.caption_logits = _build_captioning_net(image_rep, reuse=False, keep_ph=self.keep_ph) 
+        self.caption_hardmax = tf.argmax(self.caption_logits, axis=-1)
+
+        self.caption_loss = tf.nn.softmax_cross_entropy_with_logits(self.caption_logits, self.caption_ph)
+        self.caption_train = self.optimizer.minimize(self.caption_loss)
 
 
-
-        # TODO: this for all perception
+        # init, etc.
         # set to initialize vision network from checkpoint
         tf.contrib.framework.init_from_checkpoint(
             model_config['vision_checkpoint_location'],
             {'InceptionV3/': 'perception/InceptionV3/'})
+
+        sess_config = tf.ConfigProto()
+        sess_config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=sess_config) 
+
+        self.sess.run(tf.global_variables_initializer())
  
 
-    def __example_to_feeddict(self, example):
+    def _example_to_feeddict(self, example):
         img = io.imread(example["image_name"]) 
         img = resize_image(rescale_image(img))
         captions = example["captions"] 
@@ -169,5 +195,33 @@ class captioning_model(object):
         }
         return feed_dict
 
-    def run_train_exemplar(self, exemplar):
-       pass 
+    def run_train_example(self, example):
+        feed_dict = self._example_to_feeddict(example)
+        self.sess.run(self.caption_train, feed_dict=feed_dict)
+
+
+    def run_test_example(self, example, return_loss=True, return_words=False):
+        """Runs an example, returns loss and optionally the words the model outputs"""
+        feed_dict = self._example_to_feeddict(example)
+        res =  {}
+        if return_words:
+            if return_loss:
+                loss, indices = self.sess.run([self.caption_loss, self.caption_hardmax], feed_dict=feed_dict)
+                res["loss"] = loss
+            else: 
+                indices = self.sess.run(self.caption_hardmax, feed_dict=feed_dict)
+            res["words"] = indices_to_words(indices)
+        else:
+            res["loss"] = self.sess.run([self.caption_loss], feed_dict=feed_dict)
+
+        return res
+
+
+
+
+
+
+
+# Run some stuff!
+model = captioning_model()
+
