@@ -43,7 +43,7 @@ def pad_or_trim(words, length, right=True, pad_token="<PAD>"):
             words = words[-length:]
     else:
         if right:
-            words = words + ["<PAD>"] * (curr_length-length) 
+            words = words + ["<PAD>"] * (length-curr_length) 
         else:
-            words = ["<PAD>"] * (curr_length-length) + words 
+            words = ["<PAD>"] * (length-curr_length) + words 
     return words
