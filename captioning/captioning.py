@@ -27,7 +27,7 @@ config = {
     "sequence_length": 30,
     "word_embedding_dim": 128,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
-    "hidden_size": 512,
+    "hidden_size": 256,
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "init_lr": 0.001,
@@ -36,6 +36,7 @@ config = {
     "loss_weights": {
     },
     "test_every_k": 5,
+    "keep_prob": 0.5, # dropout keep probability
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
@@ -93,7 +94,6 @@ def get_examples(n=None):
         data.append(this_datum)
     return data
 
-train_data = get_examples()
 
     
 
@@ -101,6 +101,7 @@ train_data = get_examples()
 
 class captioning_model(object):
     def __init__(self, no_consistency=False):
+        self.curr_lr = config["init_lr"]
         self.image_ph = tf.placeholder(tf.float32, [config["batch_size"], config["image_width"], config["image_width"], 3]) 
         self.caption_ph = tf.placeholder(tf.int32, [config["batch_size"], config["sequence_length"]]) 
         self.mask_ph =  tf.placeholder(tf.bool, [config["batch_size"], config["sequence_length"]]) 
@@ -116,8 +117,8 @@ class captioning_model(object):
             with tf.variable_scope('perception'):
                 with arg_scope(inception.inception_v3_arg_scope()):
                     inception_features, _ = inception.inception_v3_base(visual_input)
-
-                net = slim.flatten(inception_features)
+                net = slim.layers.avg_pool2d(inception_features, [8, 8])
+                net = slim.flatten(tf.stop_gradient(net))
                 net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
                 return net
 
@@ -168,7 +169,7 @@ class captioning_model(object):
         self.caption_logits = _build_captioning_net(self.image_rep, reuse=False, keep_ph=self.keep_ph) 
         self.caption_hardmax = tf.argmax(self.caption_logits, axis=-1)
 
-        self.caption_loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.caption_logits, labels=tf.one_hot(self.caption_ph, depth=vocab_size))
+        self.caption_loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.caption_logits, labels=tf.one_hot(self.caption_ph, depth=vocab_size))
         self.caption_train = self.optimizer.minimize(self.caption_loss)
 
 
@@ -191,20 +192,23 @@ class captioning_model(object):
         captions = example["captions"] 
         np.random.shuffle(captions)
         feed_dict = {
-             self.image_ph: img, 
-             self.caption_ph: captions[0],
-             self.caption2_ph: captions[1]
+             self.image_ph: np.expand_dims(img, axis=0), 
+             self.caption_ph: np.expand_dims(captions[0], 0),
+             self.caption2_ph: np.expand_dims(captions[1], 0)
         }
         return feed_dict
 
     def run_train_example(self, example):
         feed_dict = self._example_to_feeddict(example)
+        feed_dict[self.keep_ph] = config["keep_prob"] 
+        feed_dict[self.lr_ph] = self.curr_lr 
         self.sess.run(self.caption_train, feed_dict=feed_dict)
 
 
     def run_test_example(self, example, return_loss=True, return_words=False):
         """Runs an example, returns loss and optionally the words the model outputs"""
         feed_dict = self._example_to_feeddict(example)
+        feed_dict[self.keep_ph] = 1. 
         res =  {}
         if return_words:
             if return_loss:
@@ -212,7 +216,7 @@ class captioning_model(object):
                 res["loss"] = loss
             else: 
                 indices = self.sess.run(self.caption_hardmax, feed_dict=feed_dict)
-            res["words"] = indices_to_words(indices)
+            res["words"] = indices_to_words(indices[0], backward_vocab)
         else:
             res["loss"] = self.sess.run([self.caption_loss], feed_dict=feed_dict)
 
@@ -226,4 +230,9 @@ class captioning_model(object):
 
 # Run some stuff!
 model = captioning_model()
+train_data = get_examples(10)
+print(model.run_test_example(train_data[0], True, True))
+model.run_train_example(train_data[0])
+print(model.run_test_example(train_data[0], True, True))
+
 
