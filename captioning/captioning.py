@@ -352,7 +352,7 @@ class captioning_model(object):
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
                 fout.write("epoch, loss\n")
-        for epoch in xrange(nepochs):
+        for epoch in range(nepochs):
             order = np.random.permutation(len(dataset))
             for i, ex_i in enumerate(order): 
                 example = dataset[ex_i]
