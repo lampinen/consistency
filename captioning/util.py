@@ -1,4 +1,5 @@
 import string
+import numpy as np
 
 punct_remover = str.maketrans('', '', string.punctuation)
 
@@ -34,16 +35,21 @@ def indices_to_words(indices, backward_vocabulary, unk_token="<UNK>"):
     return [backward_vocabulary[index] for index in indices]
 
 def pad_or_trim(words, length, right=True, pad_token="<PAD>"):
-    """Pads or trims to fixed length, on left or right side."""
+    """Pads or trims to fixed length, on left or right side, also returns mask."""
     curr_length = len(words)
     if curr_length > length:
         if right:
             words = words[:length]
+            mask = np.ones([1, length])
         else:
             words = words[-length:]
+            mask = np.ones([1, length])
     else:
         if right:
             words = words + ["<PAD>"] * (length-curr_length) 
+            mask = np.concatenate([np.ones([1,curr_length], np.bool), np.zeros([1, (length-curr_length)], np.bool)], -1)
         else:
             words = ["<PAD>"] * (length-curr_length) + words 
-    return words
+            mask = np.concatenate([np.zeros([1, (length-curr_length)], np.bool), np.ones([1,curr_length], np.bool)], -1)
+    
+    return {"words": words, "mask": mask}

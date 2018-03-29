@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import skimage.io as io
 import skimage.transform as transform
+import skimage.color as color
 
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
@@ -30,21 +31,23 @@ config = {
                                     # weird things will happen in the consistency training if this isn't true
     "hidden_size": 256,
     "rnn_num_layers": 3,
-    "full_train_every": 1, # a full training example is given once every _ training examples
+    "num_epochs": 200,
+    "test_every": 2,
     "init_lr": 0.001,
     "lr_decay": 0.85,
     "lr_decays_every": 50,
     "loss_weights": {
+        "caption_consistency_training_loss": 100., # chosen by heuristic of making losses about 
+        "image_reconstruction_training_loss": 7.,  # the same magnitude
+        "own_caption_consistency_loss": 100.,
+        "image_reconstruction_consistency_loss": 7.
     },
     "test_every_k": 5,
-    "keep_prob": 0.5, # dropout keep probability
+    "keep_prob": 1.0, # dropout keep probability
     "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
 ##
-
-np.random.seed(0)
-tf.set_random_seed(0)
 
 ########## Data ###############################################################
 ann_filename = "{}/annotations/captions_{}.json".format(config["coco_data_dir"],
@@ -75,7 +78,7 @@ def resize_image(image):
     """Resizes to [299, 299] for inception"""
     return transform.resize(image, [config["image_width"], config["image_width"]])
 
-def get_examples(n=None):
+def get_examples(n=None, coco=coco):
     """Gets n examples from coco data, or all if n is None"""
     data = []
     images = coco.getImgIds()
@@ -183,7 +186,6 @@ class captioning_model(object):
 
             self.caption_loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits=masked_logits, labels=masked_labels)
             self.caption_loss = tf.reduce_sum(self.caption_loss)
-            self.caption_train = self.optimizer.minimize(self.caption_loss)
 
         def _initialize_stuff():
             # init, etc.
@@ -199,6 +201,7 @@ class captioning_model(object):
             self.sess.run(tf.global_variables_initializer())
 
         if config["no_consistency"]:
+            self.caption_train = self.optimizer.minimize(self.caption_loss)
             _initialize_stuff()
 
         # caption reading and caption consistent net
@@ -231,6 +234,7 @@ class captioning_model(object):
             def _build_caption_consistency_net(caption_1_rep, caption_2_rep, reuse=True, keep_ph=None):
                 """Evaluates whether captions represent the same image"""
                 net = slim.layers.fully_connected(tf.concat([caption_1_rep, caption_2_rep], -1), config["hidden_size"], activation_fn=tf.nn.relu)
+                net = slim.dropout(net, keep_prob=keep_ph)
                 net = slim.layers.fully_connected(net, 1, activation_fn=tf.nn.sigmoid)
                 return net
 
@@ -240,23 +244,57 @@ class captioning_model(object):
             self.neg_caption_rep = _build_caption_reading_net(tf.reverse(self.neg_caption_ph, [-1]), reuse=True, keep_ph=self.keep_ph)
             self.own_caption_rep = _build_caption_processing_net(tf.reverse(own_caption_embs, [-1]), reuse=True, keep_ph=self.keep_ph)
 
-            self.caption_consistency_loss = tf.square(1-_build_caption_consistency_net(self.caption_rep, self.caption2_rep, False, self.keep_ph))
-            self.caption_consistency_loss += tf.square(_build_caption_consistency_net(self.caption_rep, self.neg_caption_rep, False, self.keep_ph))
+            self.caption_consistency_training_loss = tf.square(1-_build_caption_consistency_net(self.caption_rep, self.caption2_rep, False, self.keep_ph))
+            self.caption_consistency_training_loss += tf.square(_build_caption_consistency_net(self.caption_rep, self.neg_caption_rep, False, self.keep_ph))
 
             self.own_caption_consistency_loss = tf.square(1-_build_caption_consistency_net(self.caption2_rep, self.own_caption_rep, False, self.keep_ph))
 
-        # images from captions
+            # images from captions
+            def _build_caption_to_image_rep_net(caption_rep, reuse=True, keep_ph=None):
+                """Tries to reconstruct image rep from caption"""
+                net = caption_rep
+                net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
+                net = slim.dropout(net, keep_prob=keep_ph)
+                net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
+                net = slim.dropout(net, keep_prob=keep_ph)
+                net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
+                return net
 
+            self.reconstructed_image_rep = _build_caption_to_image_rep_net(self.caption_rep, reuse=False, keep_ph=self.keep_ph)
+            self.image_reconstruction_training_loss = tf.nn.l2_loss(self.reconstructed_image_rep - self.image_rep)
 
+            self.own_caption_reconstructed_image_rep = _build_caption_to_image_rep_net(self.own_caption_rep, reuse=True, keep_ph=self.keep_ph)
+            self.image_reconstruction_consistency_loss = tf.nn.l2_loss(self.own_caption_reconstructed_image_rep - self.image_rep)
+
+        # aggregated losses and training
         self.main_train_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "basic_net/") 
         self.other_train_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "consistency_evaluation/") 
 #        print(self.main_train_vars)
 #        print(self.other_train_vars)
+        self.caption_train = self.optimizer.minimize(self.caption_loss, var_list=self.main_train_vars)
+
+        # loss for training consistency and reconstruction nets
+        self.train_c_agg_loss = config["loss_weights"]["caption_consistency_training_loss"] * self.caption_consistency_training_loss + config["loss_weights"]["image_reconstruction_training_loss"] * self.image_reconstruction_training_loss
+        # loss for using them to improve captioning
+        self.use_c_agg_loss = self.caption_loss + config["loss_weights"]["own_caption_consistency_loss"] * self.own_caption_consistency_loss + config["loss_weights"]["image_reconstruction_consistency_loss"] * self.image_reconstruction_consistency_loss 
+
+        # for outputting only
+        self.all_losses = [self.caption_loss, self.caption_consistency_training_loss, self.image_reconstruction_training_loss, self.own_caption_consistency_loss, self.image_reconstruction_consistency_loss]
+
+        self.consistency_train = self.optimizer.minimize(self.train_c_agg_loss, var_list=self.other_train_vars)
+        self.caption_train_with_consistency = self.optimizer.minimize(self.use_c_agg_loss, var_list=self.main_train_vars)
+
+        # for convenience
+        self.full_train = [self.consistency_train, self.caption_train_with_consistency]
+
+        #
         _initialize_stuff()
  
 
     def _example_to_feeddict(self, example, negative_example=None):
         img = io.imread(example["image_name"]) 
+        if len(np.shape(img)) == 2: # grayscale
+            img = color.gray2rgb(img) 
         img = resize_image(rescale_image(img))
         captions = example["captions"] 
         np.random.shuffle(captions)
@@ -268,46 +306,93 @@ class captioning_model(object):
              self.mask2_ph: captions[1]["mask"]
         }
         if negative_example is not None: # use a random caption from other as neg
-            feed_dict[self.neg_caption_ph]= np.expand_dims(
-                negative_example["captions"][np.random.randint(5)]["caption"], 0),
+            feed_dict[self.neg_caption_ph] = np.expand_dims(
+                negative_example["captions"][np.random.randint(5)]["caption"], 0)
             
         return feed_dict
+ 
 
     def run_train_example(self, example, basic=False, negative_example=None):
-        feed_dict = self._example_to_feeddict(example)
+        feed_dict = self._example_to_feeddict(example, negative_example=negative_example)
         feed_dict[self.keep_ph] = config["keep_prob"] 
         feed_dict[self.lr_ph] = self.curr_lr 
-        self.sess.run(self.caption_train, feed_dict=feed_dict)
-
-
-    def run_test_example(self, example, return_loss=True, return_words=False):
-        """Runs an example, returns loss and optionally the words the model outputs"""
-        feed_dict = self._example_to_feeddict(example)
-        feed_dict[self.keep_ph] = 1. 
-        res =  {}
-        if return_words:
-            if return_loss:
-                loss, indices = self.sess.run([self.caption_loss, self.caption_hardmax], feed_dict=feed_dict)
-                res["loss"] = loss
-            else: 
-                indices = self.sess.run(self.caption_hardmax, feed_dict=feed_dict)
-            res["words"] = indices_to_words(indices[0], backward_vocab)
+        if basic:
+            self.sess.run(self.caption_train, feed_dict=feed_dict)
         else:
-            res["loss"] = self.sess.run([self.caption_loss], feed_dict=feed_dict)
+            self.sess.run(self.full_train, feed_dict=feed_dict)
+
+
+    def run_test_example(self, example, return_loss=True, return_words=False, negative_example=None, return_all_losses=False):
+        """Runs an example, returns loss and optionally the words the model outputs or returns all losses"""
+        feed_dict = self._example_to_feeddict(example, negative_example)
+        feed_dict[self.keep_ph] = 1. 
+        to_run = {}
+
+        if return_loss:
+            to_run["loss"] = self.caption_loss
+        if return_words:
+            to_run["words"] = self.caption_hardmax
+        if return_all_losses:
+            to_run["all_losses"] = self.all_losses
+
+        res = self.sess.run(to_run, feed_dict=feed_dict)
+        if return_words:
+            res["words"] = indices_to_words(res["words"][0], backward_vocab)
 
         return res
 
+    def eval(self, test_dataset):
+        """Runs test dataset, returns loss"""
+        loss = 0.
+        for example in test_dataset: 
+            loss += self.run_test_example(example)["loss"]
+        return loss/len(test_dataset)
 
+    def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None):
+        if logfile_path is not None:
+            with open(logfile_path, "w") as fout:
+                fout.write("epoch, loss\n")
+        for epoch in xrange(nepochs):
+            order = np.random.permutation(len(dataset))
+            for i, ex_i in enumerate(order): 
+                example = dataset[ex_i]
+                if i < len(dataset):
+                    negative_example = dataset[order[ex_i+1]]
+                else:
+                    negative_example = dataset[order[0]]
+                self.run_train_example(example, negative_example)
+                
+            if epoch % config["test_every"] == 0 and test_dataset is not None: 
+                curr_loss = self.eval(test_dataset)
+                print("epoch: %i, current loss: %f" %(epoch, curr_loss))
+                if logfile_path is not None:
+                    with open(logfile_path, "a") as fout:
+                        fout.write("%i, %f\n" %(epoch, curr_loss))
 
-
-
+            if epoch % config["lr_decays_every"] == 0:
+                self.curr_lr *= config["lr_decay"]
 
 
 # Run some stuff!
-model = captioning_model()
-train_data = get_examples(10)
-print(model.run_test_example(train_data[0], True, True))
-model.run_train_example(train_data[0])
-print(model.run_test_example(train_data[0], True, True))
+np.random.seed(0)
+tf.set_random_seed(0)
 
+model = captioning_model()
+#train_data = get_examples(10)
+#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
+#print(model.run_test_example(train_data[1], True, True, train_data[0], True))
+#print(model.run_test_example(train_data[2], True, True, train_data[3], True))
+#print(model.run_test_example(train_data[4], True, True, train_data[5], True))
+#print(model.run_test_example(train_data[6], True, True, train_data[7], True))
+#model.run_train_example(train_data[0], train_data[1])
+#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
+#
+
+
+
+train_data = get_examples()
+test_data = train_data[:1000]
+print("Initial loss: %f" % model.eval(test_data))
+model.train(train_data, test_dataset=test_data, logfile_path="./results/log.csv")
+print("Final loss: %f" % model.eval(test_data))
 
