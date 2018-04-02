@@ -361,7 +361,7 @@ class captioning_model(object):
             for i, ex_i in enumerate(order): 
                 example = dataset[ex_i]
                 if i < last_example_i:
-                    negative_example = dataset[order[ex_i+1]]
+                    negative_example = dataset[order[i+1]]
                 else:
                     negative_example = dataset[order[0]]
                 self.run_train_example(example, negative_example)
