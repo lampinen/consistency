@@ -2,6 +2,8 @@
 from __future__ import division 
 
 import sys
+import time
+
 import numpy as np
 import skimage.io as io
 import skimage.transform as transform
@@ -32,10 +34,10 @@ config = {
     "hidden_size": 256,
     "rnn_num_layers": 3,
     "num_epochs": 200,
-    "test_every": 2,
+    "test_every": 1,
     "init_lr": 0.001,
     "lr_decay": 0.85,
-    "lr_decays_every": 50,
+    "lr_decays_every": 1,
     "loss_weights": {
         "caption_consistency_training_loss": 100., # chosen by heuristic of making losses about 
         "image_reconstruction_training_loss": 7.,  # the same magnitude
@@ -352,11 +354,13 @@ class captioning_model(object):
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
                 fout.write("epoch, loss\n")
+        last_example_i = len(dataset) - 1
+        start_time = time.time()
         for epoch in range(nepochs):
             order = np.random.permutation(len(dataset))
             for i, ex_i in enumerate(order): 
                 example = dataset[ex_i]
-                if i < len(dataset):
+                if i < last_example_i:
                     negative_example = dataset[order[ex_i+1]]
                 else:
                     negative_example = dataset[order[0]]
@@ -364,13 +368,14 @@ class captioning_model(object):
                 
             if epoch % config["test_every"] == 0 and test_dataset is not None: 
                 curr_loss = self.eval(test_dataset)
-                print("epoch: %i, current loss: %f" %(epoch, curr_loss))
+                print("epoch: %i, current loss: %f, elapsed_time: %.1f" %(epoch, curr_loss, time.time() - start_time))
                 if logfile_path is not None:
                     with open(logfile_path, "a") as fout:
                         fout.write("%i, %f\n" %(epoch, curr_loss))
 
             if epoch % config["lr_decays_every"] == 0:
                 self.curr_lr *= config["lr_decay"]
+
 
 
 # Run some stuff!
@@ -391,8 +396,9 @@ model = captioning_model()
 
 
 train_data = get_examples()
+print(len(train_data))
 test_data = train_data[:1000]
 print("Initial loss: %f" % model.eval(test_data))
-model.train(train_data, test_dataset=test_data, logfile_path="./results/log.csv")
+model.train(train_data, nepochs=config["num_epochs"], test_dataset=test_data, logfile_path="./results/log.csv")
 print("Final loss: %f" % model.eval(test_data))
 
