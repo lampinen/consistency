@@ -21,7 +21,7 @@ def words_to_string(words):
         elif words[i] == "<EOS>":
             outwords.append(".")
         else:
-            outwords.append(words)
+            outwords.append(word)
 
     return " ".join(outwords)
 
