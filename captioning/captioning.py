@@ -46,7 +46,7 @@ config = {
     },
     "test_every_k": 5,
     "keep_prob": 1.0, # dropout keep probability
-    "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
+    "batch_size": 10 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
 
 ##
@@ -160,7 +160,7 @@ class captioning_model(object):
                     state = stacked_cell.zero_state(config['batch_size'], tf.float32)
                     state = tuple([tf.contrib.rnn.LSTMStateTuple(image_rep, state[0][1])] + [state[i] for i in range(1, len(state))])
 
-                    emb_output = tf.reshape(start_token, [config['batch_size'], -1])
+                    emb_output = tf.stack([start_token for i in range(config['batch_size'])], axis=0)
 
                     with tf.variable_scope("recurrence", reuse=reuse):
                         output_to_emb_output = tf.get_variable(
@@ -293,29 +293,44 @@ class captioning_model(object):
         _initialize_stuff()
  
 
-    def _example_to_feeddict(self, example, negative_example=None):
-        img = io.imread(example["image_name"]) 
-        if len(np.shape(img)) == 2: # grayscale
-            img = color.gray2rgb(img) 
-        img = resize_image(rescale_image(img))
-        captions = example["captions"] 
-        np.random.shuffle(captions)
+    def _examples_to_feeddict(self, examples, negative_examples=None):
+        images = []
+        caption1s = []
+        mask1s = []
+        caption2s = []
+        mask2s = []
+        for example in examples:
+            img = io.imread(example["image_name"]) 
+            if len(np.shape(img)) == 2: # grayscale
+                img = color.gray2rgb(img) 
+            img = resize_image(rescale_image(img))
+            images.append(img)
+            captions = example["captions"] 
+            np.random.shuffle(captions)
+            caption1s.append(captions[0]["caption"])
+            mask1s.append(captions[0]["mask"][0])
+            caption2s.append(captions[1]["caption"])
+            mask2s.append(captions[1]["mask"][0])
+
         feed_dict = {
-             self.image_ph: np.expand_dims(img, axis=0), 
-             self.caption_ph: np.expand_dims(captions[0]["caption"], 0),
-             self.mask_ph: captions[0]["mask"],
-             self.caption2_ph: np.expand_dims(captions[1]["caption"], 0),
-             self.mask2_ph: captions[1]["mask"]
+             self.image_ph: np.array(images), 
+             self.caption_ph: np.array(caption1s), 
+             self.mask_ph: np.array(mask1s), 
+             self.caption2_ph: np.array(caption2s), 
+             self.mask2_ph: np.array(mask2s), 
         }
-        if negative_example is not None: # use a random caption from other as neg
-            feed_dict[self.neg_caption_ph] = np.expand_dims(
-                negative_example["captions"][np.random.randint(5)]["caption"], 0)
+        if negative_examples is not None: # use a random caption from other as neg
+            negative_captions = []
+            for negative_example in negative_examples:
+                negative_captions.append(
+                    negative_example["captions"][np.random.randint(5)]["caption"])
+            feed_dict[self.neg_caption_ph] = np.array(negative_captions) 
             
         return feed_dict
  
 
-    def run_train_example(self, example, basic=False, negative_example=None):
-        feed_dict = self._example_to_feeddict(example, negative_example=negative_example)
+    def run_train_examples(self, examples, basic=False, negative_examples=None):
+        feed_dict = self._examples_to_feeddict(examples, negative_examples=negative_examples)
         feed_dict[self.keep_ph] = config["keep_prob"] 
         feed_dict[self.lr_ph] = self.curr_lr 
         if basic:
@@ -324,9 +339,9 @@ class captioning_model(object):
             self.sess.run(self.full_train, feed_dict=feed_dict)
 
 
-    def run_test_example(self, example, return_loss=True, return_words=False, negative_example=None, return_all_losses=False):
+    def run_test_examples(self, examples, return_loss=True, return_words=False, negative_examples=None, return_all_losses=False):
         """Runs an example, returns loss and optionally the words the model outputs or returns all losses"""
-        feed_dict = self._example_to_feeddict(example, negative_example)
+        feed_dict = self._examples_to_feeddict(examples, negative_examples)
         feed_dict[self.keep_ph] = 1. 
         to_run = {}
 
@@ -339,7 +354,7 @@ class captioning_model(object):
 
         res = self.sess.run(to_run, feed_dict=feed_dict)
         if return_words:
-            res["words"] = indices_to_words(res["words"][0], backward_vocab)
+            res["words"] = [indices_to_words(res["words"][i], backward_vocab) for i in range(config['batch_size'])]
 
         return res
 
@@ -351,20 +366,22 @@ class captioning_model(object):
         return loss/len(test_dataset)
 
     def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None):
+        batch_size = config['batch_size']
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
                 fout.write("epoch, loss\n")
-        last_example_i = len(dataset) - 1
+        num_batches = len(dataset)//batch_size_i
+        last_batch_i = num_batches - 1
         start_time = time.time()
         for epoch in range(nepochs):
             order = np.random.permutation(len(dataset))
-            for i, ex_i in enumerate(order): 
-                example = dataset[ex_i]
-                if i < last_example_i:
-                    negative_example = dataset[order[i+1]]
+            for i in range(num_batches): 
+                examples = dataset[order[i*batch_size:(i+1)*batch_size]]
+                if i < last_batch_i:
+                    negative_examples = dataset[order[(i+1)*batch_size:(i+2)*batch_size]]
                 else:
-                    negative_example = dataset[order[0]]
-                self.run_train_example(example, negative_example)
+                    negative_examples = dataset[order[:batch_size]]
+                self.run_train_examples(examples, negative_examples)
                 
             if epoch % config["test_every"] == 0 and test_dataset is not None: 
                 curr_loss = self.eval(test_dataset)
@@ -384,13 +401,14 @@ tf.set_random_seed(0)
 
 model = captioning_model()
 #train_data = get_examples(10)
-#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
-#print(model.run_test_example(train_data[1], True, True, train_data[0], True))
-#print(model.run_test_example(train_data[2], True, True, train_data[3], True))
-#print(model.run_test_example(train_data[4], True, True, train_data[5], True))
-#print(model.run_test_example(train_data[6], True, True, train_data[7], True))
-#model.run_train_example(train_data[0], train_data[1])
-#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
+#print(model.run_test_examples([train_data[0], train_data[1]], True, True, [train_data[2], train_data[3]], True))
+##print(model.run_test_examples(train_data[1], True, True, train_data[0], True))
+##print(model.run_test_examples(train_data[2], True, True, train_data[3], True))
+##print(model.run_test_examples(train_data[4], True, True, train_data[5], True))
+##print(model.run_test_examples(train_data[6], True, True, train_data[7], True))
+#model.run_train_examples([train_data[0],train_data[1]], [train_data[2],train_data[3]])
+#print(model.run_test_examples([train_data[0], train_data[1]], True, True, [train_data[2], train_data[3]], True))
+#exit()
 #
 
 
