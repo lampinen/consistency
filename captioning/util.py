@@ -15,10 +15,10 @@ def caption_to_words(caption):
 def words_to_string(words): 
     """Inverse of caption to words, more or less."""
     outwords = []
-    for i in range(len(words)):
-        if words[i] == "<PAD>":
+    for word in words: 
+        if word == "<PAD>":
             continue
-        elif words[i] == "<EOS>":
+        elif word == "<EOS>":
             outwords.append(".")
         else:
             outwords.append(word)

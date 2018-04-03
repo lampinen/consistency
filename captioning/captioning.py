@@ -27,7 +27,7 @@ config = {
     "coco_data_type": "train2014",
     "coco_val_data_type": "val2014",
     "image_width": 299,
-    "sequence_length": 30,
+    "sequence_length": 25,
     "word_embedding_dim": 128,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
                                     # weird things will happen in the consistency training if this isn't true
@@ -35,6 +35,7 @@ config = {
     "rnn_num_layers": 3,
     "num_epochs": 200,
     "test_every": 1,
+    "output_every": 10,
     "init_lr": 0.001,
     "lr_decay": 0.85,
     "lr_decays_every": 1,
@@ -44,7 +45,6 @@ config = {
         "own_caption_consistency_loss": 100.,
         "image_reconstruction_consistency_loss": 7.
     },
-    "test_every_k": 5,
     "keep_prob": 1.0, # dropout keep probability
     "batch_size": 10 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
 }
@@ -358,6 +358,7 @@ class captioning_model(object):
 
         return res
 
+
     def eval(self, test_dataset):
         """Runs test dataset, returns loss"""
         loss = 0.
@@ -368,7 +369,29 @@ class captioning_model(object):
             loss += np.sum(self.run_test_examples(examples)["loss"])
         return loss/len(test_dataset)
 
-    def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None):
+
+    def output_results(self, test_dataset, output_path=None):
+        batch_size = config["batch_size"]
+        num_batches = len(test_dataset)//batch_size
+        if output_path is not None:
+            results = []
+        for i in range(num_batches): 
+            examples = [test_dataset[j] for j in range(i*batch_size, (i+1)*batch_size)]
+            res = self.run_test_examples(examples, return_loss=False, return_words=True)
+            captions = res["words"]
+            captions = [words_to_string(caption) for caption in captions]
+            these_results = [{"image_id": examples[j]["id"], "caption": captions[j]} for j in range(batch_size)]
+            if output_path is None:
+                print(these_results)
+            else:
+                results += these_results 
+
+        if output_path is not None:
+            with open(output_path, "w") as fout:
+                fout.write(results.__repr__())
+        
+
+    def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None, output_path=None):
         batch_size = config['batch_size']
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
@@ -392,6 +415,13 @@ class captioning_model(object):
                 if logfile_path is not None:
                     with open(logfile_path, "a") as fout:
                         fout.write("%i, %f\n" %(epoch, curr_loss))
+
+            if epoch % config["output_every"] == 0 and test_dataset is not None: 
+                if output_path is not None:
+                    curr_output_path = output_path + "-%i" % epoch
+                    print("Saving results to %s..." % curr_output_path)
+                    self.output_results(test_dataset, curr_output_path)
+                    print("Done.")
 
             if epoch % config["lr_decays_every"] == 0:
                 self.curr_lr *= config["lr_decay"]
@@ -418,8 +448,8 @@ model = captioning_model()
 
 train_data = get_examples()
 print(len(train_data))
-test_data = train_data[:1000]
+test_data = get_examples(n=10000, coco=coco_val) 
 print("Initial loss: %f" % model.eval(test_data))
-model.train(train_data, nepochs=config["num_epochs"], test_dataset=test_data, logfile_path="./results/log.csv")
+model.train(train_data, nepochs=config["num_epochs"], test_dataset=test_data, logfile_path="./results/log.csv", output_path="./results/outputs.json")
 print("Final loss: %f" % model.eval(test_data))
 
