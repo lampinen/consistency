@@ -361,8 +361,11 @@ class captioning_model(object):
     def eval(self, test_dataset):
         """Runs test dataset, returns loss"""
         loss = 0.
-        for example in test_dataset: 
-            loss += self.run_test_example(example)["loss"]
+        batch_size = config["batch_size"]
+        num_batches = len(test_dataset)//batch_size
+        for i in range(num_batches): 
+            examples = [test_dataset[j] for j in range(i*batch_size, (i+1)*batch_size)]
+            loss += np.sum(self.run_test_examples(examples)["loss"])
         return loss/len(test_dataset)
 
     def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None):
@@ -370,17 +373,17 @@ class captioning_model(object):
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
                 fout.write("epoch, loss\n")
-        num_batches = len(dataset)//batch_size_i
+        num_batches = len(dataset)//batch_size
         last_batch_i = num_batches - 1
         start_time = time.time()
         for epoch in range(nepochs):
             order = np.random.permutation(len(dataset))
             for i in range(num_batches): 
-                examples = dataset[order[i*batch_size:(i+1)*batch_size]]
+                examples = [dataset[j] for j in order[i*batch_size:(i+1)*batch_size]]
                 if i < last_batch_i:
-                    negative_examples = dataset[order[(i+1)*batch_size:(i+2)*batch_size]]
+                    negative_examples = [dataset[j] for j in order[(i+1)*batch_size:(i+2)*batch_size]]
                 else:
-                    negative_examples = dataset[order[:batch_size]]
+                    negative_examples = [dataset[j] for j in order[:batch_size]]
                 self.run_train_examples(examples, negative_examples)
                 
             if epoch % config["test_every"] == 0 and test_dataset is not None: 
