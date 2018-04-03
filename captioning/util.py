@@ -12,6 +12,19 @@ def caption_to_words(caption):
     caption = caption.replace("EOS", "<EOS>")
     return caption.split()
 
+def words_to_string(words): 
+    """Inverse of caption to words, more or less."""
+    outwords = []
+    for i in range(len(words))
+        if words[i] == "<PAD>":
+            continue
+        elif words[i] == "<EOS>":
+            outwords.append(".")
+        else:
+            outwords.append(words)
+
+    return " ".join(outwords)
+
 def load_vocabulary_to_index(filename):
     """Takes a vocab file with one word on each line, turns into a dict where
        vocab_mapping[word] = index, with indices in order of apperance in file.
