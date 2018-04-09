@@ -27,18 +27,18 @@ config = {
     "coco_data_type": "train2014",
     "coco_val_data_type": "val2014",
     "image_width": 299,
-    "sequence_length": 25,
-    "word_embedding_dim": 128,
+    "sequence_length": 30,
+    "word_embedding_dim": 256,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
                                     # weird things will happen in the consistency training if this isn't true
-    "hidden_size": 256,
-    "rnn_num_layers": 3,
+    "hidden_size": 512,
+    "rnn_num_layers": 4,
     "num_epochs": 200,
     "test_every": 1,
     "output_every": 10,
-    "init_lr": 0.001,
+    "init_lr": 0.0005,
     "lr_decay": 0.85,
-    "lr_decays_every": 1,
+    "lr_decays_every": 2,
     "loss_weights": {
         "caption_consistency_training_loss": 100., # chosen by heuristic of making losses about 
         "image_reconstruction_training_loss": 7.,  # the same magnitude
@@ -46,7 +46,8 @@ config = {
         "image_reconstruction_consistency_loss": 7.
     },
     "keep_prob": 1.0, # dropout keep probability
-    "batch_size": 10 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
+    "freeze_cnn": False, # whether to freeze CNN weights or train them
+    "batch_size": 20 
 }
 
 ##
@@ -119,7 +120,7 @@ class captioning_model(object):
         self.lr_ph = tf.placeholder(tf.float32)
         self.keep_ph = tf.placeholder(tf.float32)
 
-        self.optimizer = tf.train.AdamOptimizer(self.lr_ph) 
+        self.optimizer = tf.train.RMSPropOptimizer(self.lr_ph) 
         
         # perception
         def _build_perception_network(visual_input):
@@ -127,7 +128,9 @@ class captioning_model(object):
                 with arg_scope(inception.inception_v3_arg_scope()):
                     inception_features, _ = inception.inception_v3_base(visual_input)
                 net = slim.layers.avg_pool2d(inception_features, [8, 8])
-                net = slim.flatten(tf.stop_gradient(net))
+                if config["freeze_cnn"]:
+                    net = tf.stop_gradient(net)
+                net = slim.flatten(net)
                 net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
                 return net
 
@@ -449,6 +452,7 @@ model = captioning_model()
 train_data = get_examples()
 print(len(train_data))
 test_data = get_examples(n=10000, coco=coco_val) 
+#print(test_data[0])
 print("Initial loss: %f" % model.eval(test_data))
 model.train(train_data, nepochs=config["num_epochs"], test_dataset=test_data, logfile_path="./results/log.csv", output_path="./results/outputs.json")
 print("Final loss: %f" % model.eval(test_data))
