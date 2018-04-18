@@ -20,23 +20,23 @@ config = {
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 4096,
-    "init_lr": 0.001,
-    "lr_decay": 0.95,
-    "lr_decays_every": 50,
+    "init_lr": 0.01,
+    "lr_decay": 0.85,
+    "lr_decays_every": 20,
     "loss_weights": {
         "direct_solution_loss": 1.,
-        "direct_visual_solution_loss": 0.5,
-        "reconstructed_solution_loss": 0.5,
-        "imagined_visual_solution_loss": 0.5,
+        "direct_visual_solution_loss": 1.,
+        "reconstructed_solution_loss": 1,
+        "imagined_visual_solution_loss": 1,
 
-        "true_visual_problem_reconstruction_closs": 0.5,
-        "true_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
-        "imagined_visual_problem_reconstruction_closs": 0.5,
-        "imagined_visual_visual_reconstruction_closs": 0.03, # heuristic, makes about the same size as the other losses
+        "true_visual_problem_reconstruction_closs": 1,
+        "true_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
+        "imagined_visual_problem_reconstruction_closs": 1,
+        "imagined_visual_visual_reconstruction_closs": 0.06, # heuristic, makes about the same size as the other losses
 
-        "direct_solution_direct_visual_solution_closs": 0.5,
-        "direct_solution_imagined_visual_solution_closs": 0.5,
-        "reconstructed_solution_direct_visual_solution_closs": 0.5
+        "direct_solution_direct_visual_solution_closs": 1,
+        "direct_solution_imagined_visual_solution_closs": 1,
+        "reconstructed_solution_direct_visual_solution_closs": 1
     },
     "test_every_k": 5,
     "training_keep_prob": 0.9, # dropout prob during traiing
@@ -925,7 +925,7 @@ class consistency_model(object):
         print(test_losses[-1])
         for epoch in range(nepochs):
             np.random.shuffle(train_dataset)
-            self.run_train_dataset(train_dataset)#, consistency_dataset=test_dataset)
+            self.run_train_dataset(train_dataset, consistency_dataset=test_dataset)
             if epoch % config["test_every_k"] == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
                 test_losses.append(self.run_test_dataset(test_dataset, test_only_main=True))

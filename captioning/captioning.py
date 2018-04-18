@@ -2,6 +2,8 @@
 from __future__ import division 
 
 import sys
+import time
+
 import numpy as np
 import skimage.io as io
 import skimage.transform as transform
@@ -26,25 +28,26 @@ config = {
     "coco_val_data_type": "val2014",
     "image_width": 299,
     "sequence_length": 30,
-    "word_embedding_dim": 128,
+    "word_embedding_dim": 256,
     "shared_word_embeddings": True, # whether input and output embeddings are the same or different
                                     # weird things will happen in the consistency training if this isn't true
-    "hidden_size": 256,
-    "rnn_num_layers": 3,
+    "hidden_size": 512,
+    "rnn_num_layers": 4,
     "num_epochs": 200,
-    "test_every": 2,
-    "init_lr": 0.001,
+    "test_every": 1,
+    "output_every": 10,
+    "init_lr": 0.0005,
     "lr_decay": 0.85,
-    "lr_decays_every": 50,
+    "lr_decays_every": 2,
     "loss_weights": {
         "caption_consistency_training_loss": 100., # chosen by heuristic of making losses about 
         "image_reconstruction_training_loss": 7.,  # the same magnitude
         "own_caption_consistency_loss": 100.,
         "image_reconstruction_consistency_loss": 7.
     },
-    "test_every_k": 5,
     "keep_prob": 1.0, # dropout keep probability
-    "batch_size": 1 # batches larger than 1 are not supported, this is just to get rid of the "magic constant" feel where it has to be specified
+    "freeze_cnn": False, # whether to freeze CNN weights or train them
+    "batch_size": 20 
 }
 
 ##
@@ -117,7 +120,7 @@ class captioning_model(object):
         self.lr_ph = tf.placeholder(tf.float32)
         self.keep_ph = tf.placeholder(tf.float32)
 
-        self.optimizer = tf.train.AdamOptimizer(self.lr_ph) 
+        self.optimizer = tf.train.RMSPropOptimizer(self.lr_ph) 
         
         # perception
         def _build_perception_network(visual_input):
@@ -125,7 +128,9 @@ class captioning_model(object):
                 with arg_scope(inception.inception_v3_arg_scope()):
                     inception_features, _ = inception.inception_v3_base(visual_input)
                 net = slim.layers.avg_pool2d(inception_features, [8, 8])
-                net = slim.flatten(tf.stop_gradient(net))
+                if config["freeze_cnn"]:
+                    net = tf.stop_gradient(net)
+                net = slim.flatten(net)
                 net = slim.layers.fully_connected(net, config["hidden_size"], activation_fn=tf.nn.relu)
                 return net
 
@@ -158,7 +163,7 @@ class captioning_model(object):
                     state = stacked_cell.zero_state(config['batch_size'], tf.float32)
                     state = tuple([tf.contrib.rnn.LSTMStateTuple(image_rep, state[0][1])] + [state[i] for i in range(1, len(state))])
 
-                    emb_output = tf.reshape(start_token, [config['batch_size'], -1])
+                    emb_output = tf.stack([start_token for i in range(config['batch_size'])], axis=0)
 
                     with tf.variable_scope("recurrence", reuse=reuse):
                         output_to_emb_output = tf.get_variable(
@@ -291,29 +296,44 @@ class captioning_model(object):
         _initialize_stuff()
  
 
-    def _example_to_feeddict(self, example, negative_example=None):
-        img = io.imread(example["image_name"]) 
-        if len(np.shape(img)) == 2: # grayscale
-            img = color.gray2rgb(img) 
-        img = resize_image(rescale_image(img))
-        captions = example["captions"] 
-        np.random.shuffle(captions)
+    def _examples_to_feeddict(self, examples, negative_examples=None):
+        images = []
+        caption1s = []
+        mask1s = []
+        caption2s = []
+        mask2s = []
+        for example in examples:
+            img = io.imread(example["image_name"]) 
+            if len(np.shape(img)) == 2: # grayscale
+                img = color.gray2rgb(img) 
+            img = resize_image(rescale_image(img))
+            images.append(img)
+            captions = example["captions"] 
+            np.random.shuffle(captions)
+            caption1s.append(captions[0]["caption"])
+            mask1s.append(captions[0]["mask"][0])
+            caption2s.append(captions[1]["caption"])
+            mask2s.append(captions[1]["mask"][0])
+
         feed_dict = {
-             self.image_ph: np.expand_dims(img, axis=0), 
-             self.caption_ph: np.expand_dims(captions[0]["caption"], 0),
-             self.mask_ph: captions[0]["mask"],
-             self.caption2_ph: np.expand_dims(captions[1]["caption"], 0),
-             self.mask2_ph: captions[1]["mask"]
+             self.image_ph: np.array(images), 
+             self.caption_ph: np.array(caption1s), 
+             self.mask_ph: np.array(mask1s), 
+             self.caption2_ph: np.array(caption2s), 
+             self.mask2_ph: np.array(mask2s), 
         }
-        if negative_example is not None: # use a random caption from other as neg
-            feed_dict[self.neg_caption_ph] = np.expand_dims(
-                negative_example["captions"][np.random.randint(5)]["caption"], 0)
+        if negative_examples is not None: # use a random caption from other as neg
+            negative_captions = []
+            for negative_example in negative_examples:
+                negative_captions.append(
+                    negative_example["captions"][np.random.randint(5)]["caption"])
+            feed_dict[self.neg_caption_ph] = np.array(negative_captions) 
             
         return feed_dict
  
 
-    def run_train_example(self, example, basic=False, negative_example=None):
-        feed_dict = self._example_to_feeddict(example, negative_example=negative_example)
+    def run_train_examples(self, examples, basic=False, negative_examples=None):
+        feed_dict = self._examples_to_feeddict(examples, negative_examples=negative_examples)
         feed_dict[self.keep_ph] = config["keep_prob"] 
         feed_dict[self.lr_ph] = self.curr_lr 
         if basic:
@@ -322,9 +342,9 @@ class captioning_model(object):
             self.sess.run(self.full_train, feed_dict=feed_dict)
 
 
-    def run_test_example(self, example, return_loss=True, return_words=False, negative_example=None, return_all_losses=False):
+    def run_test_examples(self, examples, return_loss=True, return_words=False, negative_examples=None, return_all_losses=False):
         """Runs an example, returns loss and optionally the words the model outputs or returns all losses"""
-        feed_dict = self._example_to_feeddict(example, negative_example)
+        feed_dict = self._examples_to_feeddict(examples, negative_examples)
         feed_dict[self.keep_ph] = 1. 
         to_run = {}
 
@@ -337,40 +357,78 @@ class captioning_model(object):
 
         res = self.sess.run(to_run, feed_dict=feed_dict)
         if return_words:
-            res["words"] = indices_to_words(res["words"][0], backward_vocab)
+            res["words"] = [indices_to_words(res["words"][i], backward_vocab) for i in range(config['batch_size'])]
 
         return res
+
 
     def eval(self, test_dataset):
         """Runs test dataset, returns loss"""
         loss = 0.
-        for example in test_dataset: 
-            loss += self.run_test_example(example)["loss"]
+        batch_size = config["batch_size"]
+        num_batches = len(test_dataset)//batch_size
+        for i in range(num_batches): 
+            examples = [test_dataset[j] for j in range(i*batch_size, (i+1)*batch_size)]
+            loss += np.sum(self.run_test_examples(examples)["loss"])
         return loss/len(test_dataset)
 
-    def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None):
+
+    def output_results(self, test_dataset, output_path=None):
+        batch_size = config["batch_size"]
+        num_batches = len(test_dataset)//batch_size
+        if output_path is not None:
+            results = []
+        for i in range(num_batches): 
+            examples = [test_dataset[j] for j in range(i*batch_size, (i+1)*batch_size)]
+            res = self.run_test_examples(examples, return_loss=False, return_words=True)
+            captions = res["words"]
+            captions = [words_to_string(caption) for caption in captions]
+            these_results = [{"image_id": examples[j]["id"], "caption": captions[j]} for j in range(batch_size)]
+            if output_path is None:
+                print(these_results)
+            else:
+                results += these_results 
+
+        if output_path is not None:
+            with open(output_path, "w") as fout:
+                fout.write(results.__repr__())
+        
+
+    def train(self, dataset, nepochs=1000, test_dataset=None, logfile_path=None, output_path=None):
+        batch_size = config['batch_size']
         if logfile_path is not None:
             with open(logfile_path, "w") as fout:
                 fout.write("epoch, loss\n")
+        num_batches = len(dataset)//batch_size
+        last_batch_i = num_batches - 1
+        start_time = time.time()
         for epoch in range(nepochs):
             order = np.random.permutation(len(dataset))
-            for i, ex_i in enumerate(order): 
-                example = dataset[ex_i]
-                if i < len(dataset):
-                    negative_example = dataset[order[ex_i+1]]
+            for i in range(num_batches): 
+                examples = [dataset[j] for j in order[i*batch_size:(i+1)*batch_size]]
+                if i < last_batch_i:
+                    negative_examples = [dataset[j] for j in order[(i+1)*batch_size:(i+2)*batch_size]]
                 else:
-                    negative_example = dataset[order[0]]
-                self.run_train_example(example, negative_example)
+                    negative_examples = [dataset[j] for j in order[:batch_size]]
+                self.run_train_examples(examples, negative_examples)
                 
             if epoch % config["test_every"] == 0 and test_dataset is not None: 
                 curr_loss = self.eval(test_dataset)
-                print("epoch: %i, current loss: %f" %(epoch, curr_loss))
+                print("epoch: %i, current loss: %f, elapsed_time: %.1f" %(epoch, curr_loss, time.time() - start_time))
                 if logfile_path is not None:
                     with open(logfile_path, "a") as fout:
                         fout.write("%i, %f\n" %(epoch, curr_loss))
 
+            if epoch % config["output_every"] == 0 and test_dataset is not None: 
+                if output_path is not None:
+                    curr_output_path = output_path + "-%i" % epoch
+                    print("Saving results to %s..." % curr_output_path)
+                    self.output_results(test_dataset, curr_output_path)
+                    print("Done.")
+
             if epoch % config["lr_decays_every"] == 0:
                 self.curr_lr *= config["lr_decay"]
+
 
 
 # Run some stuff!
@@ -379,20 +437,23 @@ tf.set_random_seed(0)
 
 model = captioning_model()
 #train_data = get_examples(10)
-#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
-#print(model.run_test_example(train_data[1], True, True, train_data[0], True))
-#print(model.run_test_example(train_data[2], True, True, train_data[3], True))
-#print(model.run_test_example(train_data[4], True, True, train_data[5], True))
-#print(model.run_test_example(train_data[6], True, True, train_data[7], True))
-#model.run_train_example(train_data[0], train_data[1])
-#print(model.run_test_example(train_data[0], True, True, train_data[1], True))
+#print(model.run_test_examples([train_data[0], train_data[1]], True, True, [train_data[2], train_data[3]], True))
+##print(model.run_test_examples(train_data[1], True, True, train_data[0], True))
+##print(model.run_test_examples(train_data[2], True, True, train_data[3], True))
+##print(model.run_test_examples(train_data[4], True, True, train_data[5], True))
+##print(model.run_test_examples(train_data[6], True, True, train_data[7], True))
+#model.run_train_examples([train_data[0],train_data[1]], [train_data[2],train_data[3]])
+#print(model.run_test_examples([train_data[0], train_data[1]], True, True, [train_data[2], train_data[3]], True))
+#exit()
 #
 
 
 
 train_data = get_examples()
-test_data = train_data[:1000]
+print(len(train_data))
+test_data = get_examples(n=10000, coco=coco_val) 
+#print(test_data[0])
 print("Initial loss: %f" % model.eval(test_data))
-model.train(train_data, test_dataset=test_data, logfile_path="./results/log.csv")
+model.train(train_data, nepochs=config["num_epochs"], test_dataset=test_data, logfile_path="./results/log.csv", output_path="./results/outputs.json")
 print("Final loss: %f" % model.eval(test_data))
 
