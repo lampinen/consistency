@@ -20,9 +20,9 @@ config = {
     "rnn_num_layers": 3,
     "full_train_every": 1, # a full training example is given once every _ training examples
     "num_train": 4096,
-    "init_lr": 0.01,
+    "init_lr": 0.001,
     "lr_decay": 0.85,
-    "lr_decays_every": 20,
+    "lr_decays_every": 50,
     "loss_weights": {
         "direct_solution_loss": 1.,
         "direct_visual_solution_loss": 1.,
@@ -740,7 +740,6 @@ class consistency_model(object):
             self.output_hard_indices,
             feed_dict={self.problem_input_ph: exemplar["problem"],
                        self.keep_ph: 1.})
-        print(indices)
         return {"problem": [vocab[i] for i in exemplar["problem"][0]],
                 "solution": [vocab[i] for i in exemplar["solution"][0]],
                 "output": [vocab[i] for i in indices[0]]}
@@ -925,6 +924,7 @@ class consistency_model(object):
         print(test_losses[-1])
         for epoch in range(nepochs):
             np.random.shuffle(train_dataset)
+            np.random.shuffle(test_dataset)
             self.run_train_dataset(train_dataset, consistency_dataset=test_dataset)
             if epoch % config["test_every_k"] == 0:
                 train_losses.append(self.run_test_dataset(train_dataset, test_only_main=True))
